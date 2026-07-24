@@ -133,21 +133,6 @@
 <script id="app-source" type="application/x-not-executed-yet">
 "use strict";
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-
-// Load an external script only when actually needed (e.g. the Excel export
-// library), instead of blocking page startup on it. Returns a promise that
-// resolves once loaded (or immediately if already present).
-function loadScriptOnce(src) {
-    return new Promise((resolve, reject) => {
-        if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
-        const s = document.createElement("script");
-        s.src = src;
-        s.onload = () => resolve();
-        s.onerror = () => reject(new Error("failed to load " + src));
-        document.head.appendChild(s);
-    });
-}
-
 // ---------- constants ----------
 const COLORS = {
     bg: "#20211B",
@@ -163,7 +148,7 @@ const COLORS = {
     danger: "#C6512F",
 };
 const PIE_COLORS = ["#B12A42", "#6C8A5A", "#C99A3E", "#7E1F30", "#4C6440", "#8C6A9E"];
-const CATEGORIES = ["Pesticide", "Fungicide", "Fertilizer", "Bio Stimulant", "Bio Fertilizer", "FYM", "Growth Regulator", "Tool", "Other"];
+const CATEGORIES = ["Pesticide", "Fungicide", "Fertilizer", "Nutrients", "Bio Stimulant", "Bio Fertilizer", "FYM", "Growth Regulator", "Tool", "Other"];
 const UNITS = ["kg", "g", "L", "ml", "unit"];
 const EVENT_TYPES = [
     { key: "task", label: "Task", color: COLORS.creamDim },
@@ -266,12 +251,32 @@ const DEFAULT_DATA = {
     sprays: [],
     weatherLogs: [],
     yieldRecords: [],
+    expenses: [],
 };
+// Expense categories distinct from inventory CATEGORIES — these cover costs
+// that aren't stock items (labor, fuel, repairs) as well as a catch-all for
+// anything bought without going through inventory.
+const EXPENSE_CATEGORIES = ["Labor", "Fuel & Transport", "Equipment & Repairs", "Land & Lease", "Misc"];
 const uid = () => Math.random().toString(36).slice(2, 10);
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const fmtDate = (d) => new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
 const inr = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+// Load an external script only when actually needed (e.g. the Excel export
+// library), instead of blocking page startup on it.
+function loadScriptOnce(src) {
+    return new Promise((resolve, reject) => {
+        if (document.querySelector(`script[src="${src}"]`)) {
+            resolve();
+            return;
+        }
+        const s = document.createElement("script");
+        s.src = src;
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error("failed to load " + src));
+        document.head.appendChild(s);
+    });
+}
 // ---------- storage ----------
 // Standalone version: uses the browser's own localStorage instead of the
 // Claude-artifact-only window.storage API, so this file works in any browser,
@@ -289,6 +294,7 @@ async function loadData() {
                 ...parsed,
                 settings: { ...DEFAULT_DATA.settings, ...(parsed.settings || {}) },
                 fieldVisits: parsed.fieldVisits || [],
+                expenses: parsed.expenses || [],
             };
         }
     }
@@ -523,9 +529,8 @@ function Dashboard({ data, setActiveTab, notifications }) {
         return list.sort((a, b) => a.date.localeCompare(b.date)).slice(0, 6);
     }, [data]);
     const lowStock = data.inventory.filter((i) => i.qty <= i.reorderLevel);
-    const totalSpend = data.sprays
-        .filter((s) => s.status === "done")
-        .reduce((sum, s) => sum + (s.cost || 0), 0);
+    const totalSpend = data.sprays.filter((s) => s.status === "done").reduce((sum, s) => sum + (s.cost || 0), 0) +
+        data.expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
     return (React.createElement("div", { className: "space-y-6" },
         React.createElement(SectionTitle, { eyebrow: data.settings.place, title: data.farmName }),
         notifications.length > 0 && (React.createElement(Card, { className: "p-4 flex items-start gap-3", style: { borderColor: COLORS.gold } },
@@ -969,30 +974,50 @@ function WeatherView({ data, mutate }) {
 }
 // ---------- Analytics ----------
 function AnalyticsView({ data, mutate }) {
+    var _a;
     const [form, setForm] = useState({ season: "Hasta Bahar", year: new Date().getFullYear(), yieldKg: "", pricePerKg: "" });
+    const [expMode, setExpMode] = useState("inventory"); // "inventory" | "manual"
+    const [expForm, setExpForm] = useState({
+        date: todayStr(),
+        inventoryId: "",
+        quantity: "",
+        deductStock: true,
+        category: "Labor",
+        description: "",
+        amount: "",
+        workers: "",
+        days: "",
+        rate: "",
+    });
+    // one combined list of every cost so far: completed spray/fertigation plans
+    // (cost recorded automatically when marked done) plus manually logged expenses
+    // (inventory pick, labor, fuel, repairs, etc.)
+    const allCosts = useMemo(() => {
+        const fromSprays = data.sprays
+            .filter((s) => s.status === "done")
+            .map((s) => {
+            const item = data.inventory.find((i) => i.id === s.inventoryId);
+            return { date: s.date, category: item ? item.category : "Other", amount: s.cost || 0 };
+        });
+        const fromExpenses = data.expenses.map((e) => ({ date: e.date, category: e.category, amount: e.amount || 0 }));
+        return [...fromSprays, ...fromExpenses];
+    }, [data]);
     const spendByCategory = useMemo(() => {
         const map = {};
-        data.sprays.filter((s) => s.status === "done").forEach((s) => {
-            const item = data.inventory.find((i) => i.id === s.inventoryId);
-            const cat = item ? item.category : "Other";
-            map[cat] = (map[cat] || 0) + (s.cost || 0);
-        });
+        allCosts.forEach((c) => { map[c.category] = (map[c.category] || 0) + c.amount; });
         return Object.entries(map).map(([name, value]) => ({ name, value }));
-    }, [data]);
+    }, [allCosts]);
     const monthlySpend = useMemo(() => {
         const map = {};
-        data.sprays.filter((s) => s.status === "done").forEach((s) => {
-            const key = s.date.slice(0, 7);
-            map[key] = (map[key] || 0) + (s.cost || 0);
-        });
+        allCosts.forEach((c) => { const key = c.date.slice(0, 7); map[key] = (map[key] || 0) + c.amount; });
         return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([month, spend]) => ({ month, spend }));
-    }, [data]);
+    }, [allCosts]);
     const completion = useMemo(() => {
         const total = data.sprays.length;
         const done = data.sprays.filter((s) => s.status === "done").length;
         return total ? Math.round((done / total) * 100) : 0;
     }, [data]);
-    const totalSpend = data.sprays.filter((s) => s.status === "done").reduce((a, s) => a + (s.cost || 0), 0);
+    const totalSpend = allCosts.reduce((a, c) => a + c.amount, 0);
     const totalRevenue = data.yieldRecords.reduce((a, y) => a + y.yieldKg * y.pricePerKg, 0);
     const addYield = () => {
         if (!form.yieldKg)
@@ -1001,6 +1026,37 @@ function AnalyticsView({ data, mutate }) {
         mutate((d) => ({ ...d, yieldRecords: [...d.yieldRecords, rec] }));
         setForm({ season: "Hasta Bahar", year: new Date().getFullYear(), yieldKg: "", pricePerKg: "" });
     };
+    const laborAuto = expForm.category === "Labor" && expForm.workers && expForm.days && expForm.rate
+        ? Number(expForm.workers) * Number(expForm.days) * Number(expForm.rate)
+        : null;
+    const addExpense = () => {
+        if (expMode === "inventory") {
+            const item = data.inventory.find((i) => i.id === expForm.inventoryId);
+            const qty = parseFloat(expForm.quantity);
+            if (!item || !qty)
+                return;
+            const amount = qty * item.costPerUnit;
+            const expense = { id: uid(), date: expForm.date, category: item.category, description: `${item.name} (${qty}${item.unit})`, amount, source: "inventory" };
+            mutate((d) => ({
+                ...d,
+                expenses: [...d.expenses, expense],
+                inventory: expForm.deductStock ? d.inventory.map((i) => (i.id === item.id ? { ...i, qty: Math.max(0, +(i.qty - qty).toFixed(2)) } : i)) : d.inventory,
+            }));
+        }
+        else {
+            const amount = laborAuto !== null ? laborAuto : parseFloat(expForm.amount) || 0;
+            if (!amount)
+                return;
+            const description = expForm.category === "Labor" && expForm.workers
+                ? `${expForm.workers} worker(s) × ${expForm.days || 1} day(s)` + (expForm.description ? ` — ${expForm.description}` : "")
+                : expForm.description || expForm.category;
+            const expense = { id: uid(), date: expForm.date, category: expForm.category, description, amount, source: "manual" };
+            mutate((d) => ({ ...d, expenses: [...d.expenses, expense] }));
+        }
+        setExpForm({ date: todayStr(), inventoryId: "", quantity: "", deductStock: true, category: "Labor", description: "", amount: "", workers: "", days: "", rate: "" });
+    };
+    const removeExpense = (id) => mutate((d) => ({ ...d, expenses: d.expenses.filter((e) => e.id !== id) }));
+    const recentExpenses = [...data.expenses].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
     return (React.createElement("div", { className: "space-y-4" },
         React.createElement(SectionTitle, { eyebrow: "Season performance", title: "Analytics" }),
         React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-4 gap-3" }, [
@@ -1021,6 +1077,69 @@ function AnalyticsView({ data, mutate }) {
             spendByCategory.length > 0 && (React.createElement(Card, { className: "p-4" },
                 React.createElement("div", { className: "text-sm mb-3", style: { color: COLORS.cream } }, "Spend by category"),
                 React.createElement(SimplePieChart, { data: spendByCategory, colors: PIE_COLORS, height: 200 })))),
+        allCosts.length === 0 && (React.createElement(Card, { className: "p-4 text-sm text-center", style: { color: COLORS.creamDim } }, "No spend recorded yet \u2014 charts above fill in once you mark a spray/fertigation plan done, or log an expense below.")),
+        React.createElement(Card, { className: "p-4" },
+            React.createElement("div", { className: "text-sm mb-3", style: { color: COLORS.cream } }, "Record an expense"),
+            React.createElement("div", { className: "flex gap-2 mb-3" },
+                React.createElement(Btn, { variant: expMode === "inventory" ? "primary" : "ghost", onClick: () => setExpMode("inventory"), className: "flex-1" }, "From inventory"),
+                React.createElement(Btn, { variant: expMode === "manual" ? "primary" : "ghost", onClick: () => setExpMode("manual"), className: "flex-1" }, "Manual / Labor")),
+            expMode === "inventory" ? (React.createElement("div", { className: "space-y-3" },
+                React.createElement("div", { className: "grid grid-cols-2 gap-3" },
+                    React.createElement(Field, { label: "Date" },
+                        React.createElement("input", { type: "date", className: inputClass, style: inputStyle, value: expForm.date, onChange: (e) => setExpForm({ ...expForm, date: e.target.value }) })),
+                    React.createElement(Field, { label: "Item" },
+                        React.createElement("select", { className: inputClass, style: inputStyle, value: expForm.inventoryId, onChange: (e) => setExpForm({ ...expForm, inventoryId: e.target.value }) },
+                            React.createElement("option", { value: "" }, "Select\u2026"),
+                            data.inventory.map((i) => React.createElement("option", { key: i.id, value: i.id },
+                                i.name,
+                                " (",
+                                inr(i.costPerUnit),
+                                "/",
+                                i.unit,
+                                ")"))))),
+                React.createElement(Field, { label: "Quantity used" },
+                    React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: expForm.quantity, onChange: (e) => setExpForm({ ...expForm, quantity: e.target.value }) })),
+                expForm.inventoryId && expForm.quantity && (React.createElement("div", { className: "text-xs", style: { color: COLORS.gold } },
+                    "Cost: ",
+                    inr((((_a = data.inventory.find((i) => i.id === expForm.inventoryId)) === null || _a === void 0 ? void 0 : _a.costPerUnit) || 0) * (parseFloat(expForm.quantity) || 0)))),
+                React.createElement("label", { className: "flex items-center gap-2 text-xs", style: { color: COLORS.creamDim } },
+                    React.createElement("input", { type: "checkbox", checked: expForm.deductStock, onChange: (e) => setExpForm({ ...expForm, deductStock: e.target.checked }) }),
+                    "Deduct this quantity from inventory stock"),
+                React.createElement(Btn, { onClick: addExpense, className: "w-full", disabled: !expForm.inventoryId || !expForm.quantity }, "Log expense"))) : (React.createElement("div", { className: "space-y-3" },
+                React.createElement("div", { className: "grid grid-cols-2 gap-3" },
+                    React.createElement(Field, { label: "Date" },
+                        React.createElement("input", { type: "date", className: inputClass, style: inputStyle, value: expForm.date, onChange: (e) => setExpForm({ ...expForm, date: e.target.value }) })),
+                    React.createElement(Field, { label: "Category" },
+                        React.createElement("select", { className: inputClass, style: inputStyle, value: expForm.category, onChange: (e) => setExpForm({ ...expForm, category: e.target.value }) }, EXPENSE_CATEGORIES.map((c) => React.createElement("option", { key: c }, c))))),
+                expForm.category === "Labor" ? (React.createElement(React.Fragment, null,
+                    React.createElement("div", { className: "grid grid-cols-3 gap-3" },
+                        React.createElement(Field, { label: "Workers" },
+                            React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: expForm.workers, onChange: (e) => setExpForm({ ...expForm, workers: e.target.value }) })),
+                        React.createElement(Field, { label: "Days" },
+                            React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: expForm.days, onChange: (e) => setExpForm({ ...expForm, days: e.target.value }) })),
+                        React.createElement(Field, { label: "Rate/day (\u20B9)" },
+                            React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: expForm.rate, onChange: (e) => setExpForm({ ...expForm, rate: e.target.value }) }))),
+                    React.createElement(Field, { label: "Task (optional)" },
+                        React.createElement("input", { className: inputClass, style: inputStyle, value: expForm.description, onChange: (e) => setExpForm({ ...expForm, description: e.target.value }), placeholder: "e.g. Pruning, harvesting" })),
+                    laborAuto !== null && (React.createElement("div", { className: "text-xs", style: { color: COLORS.gold } },
+                        "Total: ",
+                        inr(laborAuto))))) : (React.createElement(React.Fragment, null,
+                    React.createElement(Field, { label: "Description" },
+                        React.createElement("input", { className: inputClass, style: inputStyle, value: expForm.description, onChange: (e) => setExpForm({ ...expForm, description: e.target.value }), placeholder: "e.g. Diesel for pump, tractor repair" })),
+                    React.createElement(Field, { label: "Amount (\u20B9)" },
+                        React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: expForm.amount, onChange: (e) => setExpForm({ ...expForm, amount: e.target.value }) })))),
+                React.createElement(Btn, { onClick: addExpense, className: "w-full" }, "Log expense"))),
+            recentExpenses.length > 0 && (React.createElement("div", { className: "mt-4 pt-4 space-y-1.5", style: { borderTop: "1px solid #3A3C31" } }, recentExpenses.map((e) => (React.createElement("div", { key: e.id, className: "flex items-center justify-between text-xs" },
+                React.createElement("span", { style: { color: COLORS.creamDim } },
+                    fmtDate(e.date),
+                    " \u00B7 ",
+                    e.category,
+                    " \u00B7 ",
+                    e.description),
+                React.createElement("div", { className: "flex items-center gap-2 shrink-0 ml-2" },
+                    React.createElement("span", { style: { color: COLORS.cream } }, inr(e.amount)),
+                    React.createElement("button", { onClick: () => removeExpense(e.id) },
+                        React.createElement(Trash2, { size: 12, color: COLORS.creamDim }))))))))),
         React.createElement(Card, { className: "p-4" },
             React.createElement("div", { className: "text-sm mb-3", style: { color: COLORS.cream } }, "Record a season's yield"),
             React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-4 gap-3" },
@@ -1285,7 +1404,8 @@ function App() {
         if (typeof XLSX === "undefined") {
             try {
                 await loadScriptOnce("https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js");
-            } catch (e) {
+            }
+            catch (e) {
                 alert("Couldn't load the Excel export library — check your internet connection and try again.");
                 return;
             }
@@ -1300,6 +1420,7 @@ function App() {
             ["Field Visits", data.fieldVisits.map((v) => ({ Date: v.date, Category: v.tag, Plot: v.plot || "", Notes: v.notes }))],
             ["Weather Log", data.weatherLogs.map((w) => ({ Date: w.date, "Max Temp C": w.tempMax, "Min Temp C": w.tempMin, "Rainfall mm": w.rainfall, "Humidity %": w.humidity, Source: w.source }))],
             ["Yield Records", data.yieldRecords.map((y) => ({ Season: y.season, Year: y.year, "Yield (kg)": y.yieldKg, "Price/kg (INR)": y.pricePerKg, "Revenue (INR)": y.yieldKg * y.pricePerKg }))],
+            ["Expenses", data.expenses.map((e) => ({ Date: e.date, Category: e.category, Description: e.description, "Amount (INR)": e.amount, Source: e.source }))],
         ];
         sheetDefs.forEach(([name, rows]) => {
             const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Note: "No records yet" }]);
@@ -1337,6 +1458,7 @@ function App() {
       ${table("Inventory", data.inventory.map((i) => ({ Name: i.name, Category: i.category, "On hand": `${i.qty}${i.unit}`, "Reorder below": `${i.reorderLevel}${i.unit}` })), ["Name", "Category", "On hand", "Reorder below"])}
       ${table("Field Visits", data.fieldVisits.map((v) => ({ Date: fmtDate(v.date), Category: v.tag, Plot: v.plot || "—", Notes: v.notes })), ["Date", "Category", "Plot", "Notes"])}
       ${table("Yield Records", data.yieldRecords.map((y) => ({ Season: `${y.season} ${y.year}`, "Yield (kg)": y.yieldKg, "Price/kg": inr(y.pricePerKg), Revenue: inr(y.yieldKg * y.pricePerKg) })), ["Season", "Yield (kg)", "Price/kg", "Revenue"])}
+      ${table("Expenses", data.expenses.map((e) => ({ Date: fmtDate(e.date), Category: e.category, Description: e.description, Amount: inr(e.amount) })), ["Date", "Category", "Description", "Amount"])}
     </body></html>`;
         w.document.write(html);
         w.document.close();
@@ -1385,7 +1507,7 @@ function App() {
 }
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(React.createElement(App, null));
-bootDone = true; // tell the plain boot-diagnostic script that React took over successfully
+bootDone = true; // tell the plain boot-diagnostic script (loaded earlier) that React took over successfully
 
 </script>
 </body>
