@@ -1,0 +1,1392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+<title>Super Bhagwa Orchard — Farm Manager</title>
+<meta name="description" content="Pomegranate farm management: calendar, inventory, spray & fertigation planner, weather, analytics, and field visits." />
+
+<script>
+  // Defined first, so the loader below can report failures as soon as they
+  // happen — the fuller diagnostic UI (showBootError) is defined further
+  // down and will pick up anything recorded here the moment it runs.
+  var __bootErrors = [];
+  function __reportBootFail(lib) { __bootErrors.push(lib); }
+
+  // Loads a script from the first URL that works, trying alternates in order
+  // (useful when a single CDN is blocked on a given network but another isn't).
+  function __loadWithFallback(urls, label) {
+    return new Promise((resolve, reject) => {
+      let i = 0;
+      function tryNext() {
+        if (i >= urls.length) { reject(new Error(label)); return; }
+        const s = document.createElement("script");
+        s.src = urls[i++];
+        s.onload = () => resolve();
+        s.onerror = () => tryNext();
+        document.head.appendChild(s);
+      }
+      tryNext();
+    });
+  }
+
+  // React/ReactDOM are mirrored on two independent CDNs; Tailwind only has one
+  // official no-build CDN, so its own failure just means degraded styling,
+  // not a fatal one — the app still needs to be able to start without it.
+  window.__bootstrap = Promise.all([
+    __loadWithFallback(["https://cdn.tailwindcss.com"], "Tailwind").catch(() => __reportBootFail("Tailwind CSS (styling only — app can still run)")),
+    __loadWithFallback(
+      ["https://unpkg.com/react@18/umd/react.production.min.js", "https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"],
+      "React"
+    ).catch(() => { __reportBootFail("React (tried unpkg.com and cdnjs.cloudflare.com)"); throw new Error("React failed"); }),
+  ]).then(() =>
+    __loadWithFallback(
+      ["https://unpkg.com/react-dom@18/umd/react-dom.production.min.js", "https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"],
+      "ReactDOM"
+    ).catch(() => { __reportBootFail("ReactDOM (tried unpkg.com and cdnjs.cloudflare.com)"); throw new Error("ReactDOM failed"); })
+  );
+</script>
+
+<!-- Note: the app's JSX is precompiled to plain JavaScript below (no Babel needed
+     at runtime), and the Excel-export library loads on demand only when you
+     actually use that button, so neither can block the app from starting. -->
+
+<style>
+  html, body { margin: 0; padding: 0; background: #20211B; }
+  #root { min-height: 100vh; }
+  #boot-diag { min-height:100vh; display:flex; align-items:center; justify-content:center; padding: 24px; }
+  #boot-diag .box { max-width: 480px; color:#EFE7D6; font-family: -apple-system, Segoe UI, Arial, sans-serif; text-align:center; }
+  #boot-diag h2 { color:#C99A3E; margin-bottom: 8px; }
+  #boot-diag p { color:#B8AF9C; font-size: 14px; line-height:1.5; }
+  #boot-diag ul { text-align:left; color:#B8AF9C; font-size:13px; line-height:1.6; }
+  #boot-diag button { margin-top:16px; background:#B12A42; color:#EFE7D6; border:none; padding:10px 18px; border-radius:10px; font-size:14px; cursor:pointer; }
+  #boot-diag code { background:#1B1C17; padding:1px 5px; border-radius:4px; font-size:12px; color:#EFE7D6; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div id="boot-diag">
+    <div class="box">
+      <h2>Loading orchard…</h2>
+      <p id="boot-diag-msg">Fetching required libraries from the internet the first time you open this file.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+  // This runs immediately (plain JS, no Babel/React needed) so it can report a
+  // problem even if React/Babel themselves failed to load. If the real app
+  // hasn't taken over the page within a few seconds, or a script throws, show
+  // a plain-language reason instead of leaving "Loading orchard…" forever.
+  var bootDone = false;
+  function showBootError(reason) {
+    if (bootDone) return; // app already loaded successfully, ignore late/irrelevant errors
+    var diag = document.getElementById("boot-diag");
+    if (!diag) return;
+    diag.innerHTML =
+      '<div class="box">' +
+      '<h2>Couldn\'t start the app</h2>' +
+      '<p>' + reason + '</p>' +
+      '<ul>' +
+      '<li>Check that this device has an internet connection (needed once, to fetch React/Tailwind/etc.)</li>' +
+      '<li>Try a different browser (Chrome or Firefox), or turn off ad blockers / privacy extensions for this file</li>' +
+      '<li>If you are on a restricted office/school network, some may block <code>unpkg.com</code> or <code>cdn.tailwindcss.com</code></li>' +
+      '<li>Open your browser\'s console (press F12, click "Console") — a red error there tells us exactly what to fix</li>' +
+      '</ul>' +
+      '<button onclick="location.reload()">Try again</button>' +
+      '</div>';
+  }
+  window.addEventListener("error", function (e) {
+    showBootError("A script failed to run: " + (e.message || "unknown error") + ".");
+  }, true); // capture phase: resource load failures (blocked script tags) don't bubble, so this must be true to catch them
+  window.addEventListener("unhandledrejection", function (e) {
+    showBootError("A background task failed: " + (e.reason && e.reason.message ? e.reason.message : String(e.reason)) + ".");
+  });
+  if (__bootErrors.length) {
+    showBootError("These couldn't be loaded: " + __bootErrors.join(", ") + ".");
+  }
+  window.__bootstrap
+    .then(() => {
+      // React + ReactDOM are ready — pull in the app's (precompiled, plain-JS)
+      // source, which was kept inert until now, and actually run it.
+      const src = document.getElementById("app-source").textContent;
+      const s = document.createElement("script");
+      s.textContent = src;
+      document.body.appendChild(s);
+    })
+    .catch(() => {
+      showBootError("These couldn't be loaded: " + (__bootErrors.join(", ") || "React/ReactDOM") + ".");
+    });
+  setTimeout(function () {
+    if (!bootDone) {
+      if (__bootErrors.length) {
+        showBootError("These couldn't be loaded: " + __bootErrors.join(", ") + ".");
+      } else if (typeof React === "undefined") {
+        showBootError("React never became available — the library likely failed to load silently.");
+      } else {
+        showBootError("The app libraries loaded, but the app itself didn't start in time.");
+      }
+    }
+  }, 10000);
+</script>
+
+<script id="app-source" type="application/x-not-executed-yet">
+"use strict";
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+// Load an external script only when actually needed (e.g. the Excel export
+// library), instead of blocking page startup on it. Returns a promise that
+// resolves once loaded (or immediately if already present).
+function loadScriptOnce(src) {
+    return new Promise((resolve, reject) => {
+        if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+        const s = document.createElement("script");
+        s.src = src;
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error("failed to load " + src));
+        document.head.appendChild(s);
+    });
+}
+
+// ---------- constants ----------
+const COLORS = {
+    bg: "#20211B",
+    bgPanel: "#282A22",
+    bgPanelLight: "#31332A",
+    ruby: "#B12A42",
+    rubyDim: "#7E1F30",
+    leaf: "#6C8A5A",
+    leafDim: "#4C6440",
+    gold: "#C99A3E",
+    cream: "#EFE7D6",
+    creamDim: "#B8AF9C",
+    danger: "#C6512F",
+};
+const PIE_COLORS = ["#B12A42", "#6C8A5A", "#C99A3E", "#7E1F30", "#4C6440", "#8C6A9E"];
+const CATEGORIES = ["Pesticide", "Fungicide", "Fertilizer", "Bio Stimulant", "Bio Fertilizer", "FYM", "Growth Regulator", "Tool", "Other"];
+const UNITS = ["kg", "g", "L", "ml", "unit"];
+const EVENT_TYPES = [
+    { key: "task", label: "Task", color: COLORS.creamDim },
+    { key: "irrigation", label: "Irrigation", color: COLORS.leaf },
+    { key: "labor", label: "Labor", color: COLORS.creamDim },
+    { key: "field_visit", label: "Field Visit", color: COLORS.gold },
+    { key: "spraying", label: "Spraying", color: COLORS.ruby },
+    { key: "fertigation", label: "Fertigation", color: COLORS.leafDim },
+    { key: "drenching", label: "Drenching", color: COLORS.rubyDim },
+    { key: "slurry", label: "Slurry Preparation", color: COLORS.gold },
+    { key: "pruning", label: "Pruning", color: COLORS.leafDim },
+    { key: "weeding", label: "Weeding", color: COLORS.leaf },
+    { key: "pinching", label: "Pinching", color: COLORS.gold },
+];
+const eventTypeColor = (key) => { var _a; return ((_a = EVENT_TYPES.find((t) => t.key === key)) === null || _a === void 0 ? void 0 : _a.color) || COLORS.creamDim; };
+const eventTypeLabel = (key) => { var _a; return ((_a = EVENT_TYPES.find((t) => t.key === key)) === null || _a === void 0 ? void 0 : _a.label) || "Task"; };
+// Status colour, used throughout the calendar: green once done, red once overdue
+// and still not done, and the normal text colour for anything not yet due.
+function statusColor(item) {
+    const completed = item.isSpray ? item.sprayStatus === "done" : item.done;
+    if (completed)
+        return COLORS.leaf;
+    if (item.date < todayStr())
+        return COLORS.danger;
+    return COLORS.cream;
+}
+// Built-in bahar (cropping) cycle presets. A grower can also generate any number of
+// custom cycles from the month they did their induction (Ethrel) spray — see
+// makeCustomCycle() below. Every cycle, built-in or custom, is just a "shift":
+// how many months its induction stage sits from Hasta Bahar's (Sep, shift 0).
+const BAHAR_CYCLES = {
+    hasta: { key: "hasta", label: "Hasta Bahar", shift: 0, builtin: true },
+    mrig: { key: "mrig", label: "Mrig Bahar", shift: -3, builtin: true },
+    ambe: { key: "ambe", label: "Ambe (Ambia) Bahar", shift: 5, builtin: true },
+};
+// months are 0-indexed (0=Jan), defined for Hasta Bahar (shift 0).
+const BASE_STAGE_DEFS = [
+    { key: "rest", label: "Rest & Pruning", months: [3, 4, 5, 6, 7], color: COLORS.creamDim },
+    { key: "induction", label: "Stress & Ethrel Induction", months: [8], color: COLORS.gold },
+    { key: "flowering", label: "Flowering", months: [9], color: COLORS.leaf },
+    { key: "fruitset", label: "Fruit Set", months: [10], color: COLORS.leafDim },
+    { key: "development", label: "Fruit Development", months: [11, 0], color: COLORS.ruby },
+    { key: "harvest", label: "Harvest", months: [1, 2], color: COLORS.rubyDim },
+];
+const BASE_INDUCTION_MONTH = 8; // September, in BASE_STAGE_DEFS
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const shiftMonth = (m, shift) => ((m + shift) % 12 + 12) % 12;
+function getStages(shift = 0) {
+    return BASE_STAGE_DEFS.map((s) => ({ ...s, months: s.months.map((m) => shiftMonth(m, shift)) }));
+}
+function stageForDate(date, shift = 0) {
+    const m = new Date(date + "T00:00:00").getMonth();
+    const stages = getStages(shift);
+    return stages.find((s) => s.months.includes(m)) || stages[0];
+}
+// Human-readable description of a cycle, derived from its shift so it's always
+// consistent with the wheel and the spray-stage list — for built-ins and customs alike.
+function describeCycle(shift) {
+    const stages = getStages(shift);
+    const flowering = stages.find((s) => s.key === "flowering").months[0];
+    const harvest = stages.find((s) => s.key === "harvest").months;
+    return `${MONTH_NAMES[flowering]} flowering · harvest ~${MONTH_NAMES[harvest[0]]}–${MONTH_NAMES[harvest[harvest.length - 1]]}`;
+}
+// Build a new custom cycle from the month a grower actually did their induction
+// (Ethrel) spray — any month, so cycles that fall between the fixed presets
+// (e.g. induction in July) are fully supported, and any number of them can exist.
+function makeCustomCycle(label, inductionMonthIdx) {
+    const shift = inductionMonthIdx - BASE_INDUCTION_MONTH; // can be negative; shiftMonth() normalizes it
+    return { key: `custom-${uid()}`, label, shift, builtin: false, inductionMonthIdx };
+}
+function getAllCycles(data) {
+    const custom = (data.settings.customBaharCycles || []).reduce((m, c) => {
+        m[c.key] = c;
+        return m;
+    }, {});
+    return { ...BAHAR_CYCLES, ...custom };
+}
+function resolveCycle(data) {
+    const all = getAllCycles(data);
+    return all[data.settings.baharCycle] || BAHAR_CYCLES.hasta;
+}
+const DEFAULT_DATA = {
+    farmName: "Super Bhagwa Orchard",
+    settings: {
+        lat: 14.12,
+        lon: 77.27,
+        place: "Madakasira, Anantapur Dist., Andhra Pradesh",
+        notifyDaysBefore: 3,
+        notifyEnabled: false,
+        baharCycle: "hasta",
+        customBaharCycles: [],
+    },
+    events: [],
+    fieldVisits: [],
+    inventory: [
+        { id: "i1", name: "Ethrel (Ethephon 39%)", category: "Growth Regulator", qty: 2, unit: "L", reorderLevel: 1, costPerUnit: 850 },
+        { id: "i2", name: "19:19:19 NPK", category: "Fertilizer", qty: 50, unit: "kg", reorderLevel: 20, costPerUnit: 65 },
+        { id: "i3", name: "Bordeaux Mixture", category: "Pesticide", qty: 10, unit: "kg", reorderLevel: 5, costPerUnit: 120 },
+    ],
+    sprays: [],
+    weatherLogs: [],
+    yieldRecords: [],
+};
+const uid = () => Math.random().toString(36).slice(2, 10);
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const fmtDate = (d) => new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
+const inr = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+// ---------- storage ----------
+// Standalone version: uses the browser's own localStorage instead of the
+// Claude-artifact-only window.storage API, so this file works in any browser,
+// on any device, with no Claude account or internet connection required.
+// Note: this means data lives on this device/browser only — use the
+// Excel/PDF export or the JSON backup in Settings to move data between devices.
+const STORAGE_KEY = "pomegranate-farm-data";
+async function loadData() {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            return {
+                ...DEFAULT_DATA,
+                ...parsed,
+                settings: { ...DEFAULT_DATA.settings, ...(parsed.settings || {}) },
+                fieldVisits: parsed.fieldVisits || [],
+            };
+        }
+    }
+    catch (e) {
+        /* first run, or storage unavailable */
+    }
+    return DEFAULT_DATA;
+}
+async function saveData(data) {
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    }
+    catch (e) {
+        console.error("save failed", e);
+    }
+}
+// ---------- icons (inline, no external icon library needed) ----------
+const ICON_GLYPHS = {
+    sprout: "🌱", calendar: "📅", visits: "📋", inventory: "📦", spray: "💧",
+    weather: "🌧️", analytics: "📈", settings: "⚙️", bell: "🔔", plus: "+",
+    x: "✕", check: "✓", trash: "🗑", alert: "⚠️", download: "⬇️", upload: "⬆️",
+    cloudsun: "⛅", chevronleft: "‹", chevronright: "›", filesheet: "📊", printer: "🖨️",
+};
+function Icon({ name, size = 16, color, className = "" }) {
+    return (React.createElement("span", { className: className, style: {
+            fontSize: name === "chevronleft" || name === "chevronright" ? size * 1.3 : size * 0.85,
+            color,
+            lineHeight: 1,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: size,
+            height: size,
+            fontStyle: "normal",
+            flexShrink: 0,
+        } }, ICON_GLYPHS[name] || "•"));
+}
+// ---------- lightweight charts (no external chart library needed) ----------
+function ChartAxisLabel({ children }) {
+    return React.createElement("span", { style: { fontSize: 10, fill: COLORS.creamDim } }, children);
+}
+function SimpleLineChart({ data, xKey, yKey, color, height = 200, formatX, unit = "" }) {
+    const [hover, setHover] = useState(null);
+    if (!data || data.length === 0)
+        return null;
+    const width = 600;
+    const padL = 36, padR = 12, padT = 12, padB = 24;
+    const values = data.map((d) => Number(d[yKey]) || 0);
+    const maxV = Math.max(...values, 1);
+    const minV = Math.min(...values, 0);
+    const range = maxV - minV || 1;
+    const plotW = width - padL - padR;
+    const plotH = height - padT - padB;
+    const xPos = (i) => padL + (data.length === 1 ? plotW / 2 : (i / (data.length - 1)) * plotW);
+    const yPos = (v) => padT + plotH - ((v - minV) / range) * plotH;
+    const pathD = data.map((d, i) => `${i === 0 ? "M" : "L"} ${xPos(i)} ${yPos(Number(d[yKey]) || 0)}`).join(" ");
+    const gridLines = [0, 0.25, 0.5, 0.75, 1];
+    return (React.createElement("div", { style: { width: "100%", overflowX: data.length > 10 ? "auto" : "visible" } },
+        React.createElement("svg", { width: "100%", height: height, viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none", style: { display: "block" } },
+            gridLines.map((g, i) => (React.createElement("line", { key: i, x1: padL, x2: width - padR, y1: padT + plotH * g, y2: padT + plotH * g, stroke: "#3A3C31", strokeDasharray: "3 3" }))),
+            React.createElement("path", { d: pathD, fill: "none", stroke: color, strokeWidth: 2 }),
+            data.map((d, i) => (React.createElement("circle", { key: i, cx: xPos(i), cy: yPos(Number(d[yKey]) || 0), r: hover === i ? 5 : 3, fill: color, onMouseEnter: () => setHover(i), onMouseLeave: () => setHover(null), style: { cursor: "pointer" } }))),
+            data.map((d, i) => {
+                const label = formatX ? formatX(d[xKey]) : String(d[xKey]);
+                if (data.length > 8 && i % Math.ceil(data.length / 8) !== 0)
+                    return null;
+                return (React.createElement("text", { key: i, x: xPos(i), y: height - 6, textAnchor: "middle", fontSize: "9", fill: COLORS.creamDim }, label));
+            }),
+            React.createElement("text", { x: 4, y: padT + 4, fontSize: "9", fill: COLORS.creamDim }, Math.round(maxV)),
+            React.createElement("text", { x: 4, y: padT + plotH, fontSize: "9", fill: COLORS.creamDim }, Math.round(minV))),
+        hover !== null && (React.createElement("div", { className: "text-xs text-center", style: { color: COLORS.cream } },
+            formatX ? formatX(data[hover][xKey]) : data[hover][xKey],
+            ": ",
+            data[hover][yKey],
+            unit))));
+}
+function SimpleBarChart({ data, xKey, yKey, color, height = 220, unit = "" }) {
+    const [hover, setHover] = useState(null);
+    if (!data || data.length === 0)
+        return null;
+    const width = 600;
+    const padL = 36, padR = 12, padT = 12, padB = 32;
+    const values = data.map((d) => Number(d[yKey]) || 0);
+    const maxV = Math.max(...values, 1);
+    const plotW = width - padL - padR;
+    const plotH = height - padT - padB;
+    const barW = Math.min(48, (plotW / data.length) * 0.6);
+    const gap = plotW / data.length;
+    return (React.createElement("div", { style: { width: "100%", overflowX: data.length > 6 ? "auto" : "visible" } },
+        React.createElement("svg", { width: "100%", height: height, viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none", style: { display: "block" } },
+            [0, 0.25, 0.5, 0.75, 1].map((g, i) => (React.createElement("line", { key: i, x1: padL, x2: width - padR, y1: padT + plotH * g, y2: padT + plotH * g, stroke: "#3A3C31", strokeDasharray: "3 3" }))),
+            data.map((d, i) => {
+                const v = Number(d[yKey]) || 0;
+                const h = (v / maxV) * plotH;
+                const x = padL + i * gap + (gap - barW) / 2;
+                const y = padT + plotH - h;
+                return (React.createElement("g", { key: i, onMouseEnter: () => setHover(i), onMouseLeave: () => setHover(null), style: { cursor: "pointer" } },
+                    React.createElement("rect", { x: x, y: y, width: barW, height: h, rx: 5, fill: color, opacity: hover === i ? 1 : 0.85 }),
+                    React.createElement("text", { x: x + barW / 2, y: height - 10, textAnchor: "middle", fontSize: "9", fill: COLORS.creamDim }, String(d[xKey]).length > 10 ? String(d[xKey]).slice(0, 9) + "…" : d[xKey])));
+            }),
+            React.createElement("text", { x: 4, y: padT + 4, fontSize: "9", fill: COLORS.creamDim }, Math.round(maxV))),
+        hover !== null && (React.createElement("div", { className: "text-xs text-center", style: { color: COLORS.cream } },
+            data[hover][xKey],
+            ": ",
+            data[hover][yKey],
+            unit))));
+}
+function SimplePieChart({ data, colors, height = 200 }) {
+    const [hover, setHover] = useState(null);
+    if (!data || data.length === 0)
+        return null;
+    const size = height;
+    const cx = size / 2, cy = size / 2, rOuter = size / 2 - 8, rInner = rOuter * 0.55;
+    const total = data.reduce((s, d) => s + d.value, 0) || 1;
+    let cursor = -90;
+    const polar = (angle, r) => {
+        const a = (angle * Math.PI) / 180;
+        return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+    };
+    const slices = data.map((d, i) => {
+        const span = (d.value / total) * 360;
+        const start = cursor;
+        const end = cursor + span;
+        cursor = end;
+        const [x1o, y1o] = polar(start, rOuter);
+        const [x2o, y2o] = polar(end, rOuter);
+        const large = span > 180 ? 1 : 0;
+        const path = `M ${cx} ${cy} L ${x1o} ${y1o} A ${rOuter} ${rOuter} 0 ${large} 1 ${x2o} ${y2o} Z`;
+        return { ...d, path, color: colors[i % colors.length] };
+    });
+    return (React.createElement("div", { className: "flex items-center gap-4 flex-wrap justify-center" },
+        React.createElement("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}` },
+            slices.map((s, i) => (React.createElement("path", { key: i, d: s.path, fill: s.color, opacity: hover === null || hover === i ? 1 : 0.35, onMouseEnter: () => setHover(i), onMouseLeave: () => setHover(null), style: { cursor: "pointer" } }))),
+            React.createElement("circle", { cx: cx, cy: cy, r: rInner, fill: COLORS.bgPanel })),
+        React.createElement("div", { className: "space-y-1" }, slices.map((s, i) => (React.createElement("div", { key: i, className: "flex items-center gap-2 text-xs", onMouseEnter: () => setHover(i), onMouseLeave: () => setHover(null), style: { cursor: "pointer" } },
+            React.createElement("span", { className: "w-2.5 h-2.5 rounded-full shrink-0", style: { background: s.color } }),
+            React.createElement("span", { style: { color: COLORS.creamDim } },
+                s.name,
+                ": ",
+                inr(s.value))))))));
+}
+// ---------- small UI atoms ----------
+function Card({ children, className = "" }) {
+    return (React.createElement("div", { className: `rounded-2xl border ${className}`, style: { background: COLORS.bgPanel, borderColor: "#3A3C31" } }, children));
+}
+function SectionTitle({ eyebrow, title, right }) {
+    return (React.createElement("div", { className: "flex items-end justify-between mb-4" },
+        React.createElement("div", null,
+            eyebrow && (React.createElement("div", { className: "text-xs tracking-[0.2em] uppercase mb-1", style: { color: COLORS.gold, fontFamily: "'JetBrains Mono', monospace" } }, eyebrow)),
+            React.createElement("h2", { className: "text-2xl sm:text-3xl", style: { fontFamily: "'Fraunces', serif", color: COLORS.cream, fontWeight: 600 } }, title)),
+        right));
+}
+function Btn({ children, onClick, variant = "primary", className = "", type = "button", disabled }) {
+    const base = "px-4 py-2 rounded-xl text-sm font-medium transition-all flex items-center gap-2 justify-center disabled:opacity-40";
+    const styles = {
+        primary: { background: COLORS.ruby, color: COLORS.cream },
+        ghost: { background: "transparent", color: COLORS.creamDim, border: `1px solid #3A3C31` },
+        gold: { background: COLORS.gold, color: "#20211B" },
+        danger: { background: "transparent", color: COLORS.danger, border: `1px solid ${COLORS.danger}` },
+    };
+    return (React.createElement("button", { type: type, disabled: disabled, onClick: onClick, className: `${base} ${className}`, style: styles[variant] }, children));
+}
+function Field({ label, children }) {
+    return (React.createElement("label", { className: "block" },
+        React.createElement("span", { className: "block text-xs mb-1", style: { color: COLORS.creamDim } }, label),
+        children));
+}
+const inputClass = "w-full rounded-lg px-3 py-2 text-sm outline-none border focus:ring-2 focus:ring-offset-0";
+const inputStyle = { background: "#1B1C17", borderColor: "#3A3C31", color: COLORS.cream };
+function Modal({ open, onClose, title, children }) {
+    if (!open)
+        return null;
+    return (React.createElement("div", { className: "fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4", style: { background: "rgba(10,10,8,0.6)" }, onClick: onClose },
+        React.createElement("div", { className: "w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-5 max-h-[85vh] overflow-y-auto", style: { background: COLORS.bgPanelLight, border: "1px solid #3A3C31" }, onClick: (e) => e.stopPropagation() },
+            React.createElement("div", { className: "flex items-center justify-between mb-4" },
+                React.createElement("h3", { style: { fontFamily: "'Fraunces', serif", color: COLORS.cream, fontSize: "1.25rem" } }, title),
+                React.createElement("button", { onClick: onClose, style: { color: COLORS.creamDim } },
+                    React.createElement(Icon, { name: "x", size: 20 }))),
+            children)));
+}
+// ---------- Bahar wheel (signature element) ----------
+function BaharWheel({ size = 240, cycleDef }) {
+    var _a;
+    const cx = size / 2;
+    const cy = size / 2;
+    const r = size / 2 - 18;
+    const today = new Date();
+    const dayOfYear = Math.floor((today - new Date(today.getFullYear(), 0, 0)) / 86400000);
+    const todayAngle = (dayOfYear / 365) * 360 - 90;
+    const shift = (_a = cycleDef === null || cycleDef === void 0 ? void 0 : cycleDef.shift) !== null && _a !== void 0 ? _a : 0;
+    const stages = getStages(shift);
+    const segments = [];
+    let cursor = -90;
+    for (const s of stages) {
+        const span = (s.months.length / 12) * 360;
+        segments.push({ ...s, start: cursor, end: cursor + span });
+        cursor += span;
+    }
+    const polar = (angleDeg, radius) => {
+        const a = (angleDeg * Math.PI) / 180;
+        return [cx + radius * Math.cos(a), cy + radius * Math.sin(a)];
+    };
+    const arcPath = (start, end, radius) => {
+        const [x1, y1] = polar(start, radius);
+        const [x2, y2] = polar(end, radius);
+        const large = end - start > 180 ? 1 : 0;
+        return `M ${cx} ${cy} L ${x1} ${y1} A ${radius} ${radius} 0 ${large} 1 ${x2} ${y2} Z`;
+    };
+    const currentStage = stageForDate(todayStr(), shift);
+    return (React.createElement("div", { className: "flex flex-col items-center" },
+        React.createElement("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}` },
+            segments.map((s) => (React.createElement("path", { key: s.key, d: arcPath(s.start, s.end, r), fill: s.color, opacity: s.key === currentStage.key ? 1 : 0.35, stroke: COLORS.bg, strokeWidth: 2 }))),
+            React.createElement("circle", { cx: cx, cy: cy, r: r * 0.42, fill: COLORS.bg, stroke: "#3A3C31" }),
+            (() => {
+                const [x1, y1] = polar(todayAngle, r * 0.42);
+                const [x2, y2] = polar(todayAngle, r + 8);
+                return React.createElement("line", { x1: x1, y1: y1, x2: x2, y2: y2, stroke: COLORS.cream, strokeWidth: 2 });
+            })(),
+            React.createElement("text", { x: cx, y: cy - 6, textAnchor: "middle", fill: COLORS.cream, fontSize: "12", fontFamily: "'JetBrains Mono', monospace" }, today.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })),
+            React.createElement("text", { x: cx, y: cy + 12, textAnchor: "middle", fill: COLORS.creamDim, fontSize: "9", fontFamily: "'JetBrains Mono', monospace" }, ((cycleDef === null || cycleDef === void 0 ? void 0 : cycleDef.label) || "Bahar Cycle").toUpperCase())),
+        React.createElement("div", { className: "mt-3 text-center" },
+            React.createElement("div", { style: { color: COLORS.gold, fontFamily: "'JetBrains Mono', monospace", fontSize: "0.7rem", letterSpacing: "0.15em" } }, "CURRENT STAGE"),
+            React.createElement("div", { style: { color: COLORS.cream, fontFamily: "'Fraunces', serif", fontSize: "1.1rem" } }, currentStage.label))));
+}
+// ---------- Dashboard ----------
+function Dashboard({ data, setActiveTab, notifications }) {
+    const upcoming = useMemo(() => {
+        const list = [
+            ...data.events.filter((e) => !e.done).map((e) => ({ ...e, kind: "event", overdue: e.date < todayStr() })),
+            ...data.sprays.filter((s) => s.status === "planned").map((s) => ({ ...s, kind: "spray", title: `${s.type === "spray" ? "Spray" : "Fertigation"}: ${s.productName}`, overdue: s.date < todayStr() })),
+        ];
+        return list.sort((a, b) => a.date.localeCompare(b.date)).slice(0, 6);
+    }, [data]);
+    const lowStock = data.inventory.filter((i) => i.qty <= i.reorderLevel);
+    const totalSpend = data.sprays
+        .filter((s) => s.status === "done")
+        .reduce((sum, s) => sum + (s.cost || 0), 0);
+    return (React.createElement("div", { className: "space-y-6" },
+        React.createElement(SectionTitle, { eyebrow: data.settings.place, title: data.farmName }),
+        notifications.length > 0 && (React.createElement(Card, { className: "p-4 flex items-start gap-3", style: { borderColor: COLORS.gold } },
+            React.createElement(Icon, { name: "bell", size: 18, color: COLORS.gold, className: "mt-0.5 shrink-0" }),
+            React.createElement("div", { className: "space-y-1" }, notifications.map((n, i) => (React.createElement("div", { key: i, className: "text-sm", style: { color: COLORS.cream } }, n)))))),
+        React.createElement("div", { className: "grid sm:grid-cols-3 gap-4" },
+            React.createElement(Card, { className: "p-6 sm:col-span-1 flex flex-col items-center justify-center gap-2" },
+                React.createElement(BaharWheel, { size: 220, cycleDef: resolveCycle(data) }),
+                React.createElement("div", { className: "text-xs text-center", style: { color: COLORS.creamDim } }, describeCycle(resolveCycle(data).shift))),
+            React.createElement(Card, { className: "p-5 sm:col-span-2" },
+                React.createElement("div", { className: "text-xs mb-3 tracking-widest uppercase", style: { color: COLORS.creamDim, fontFamily: "'JetBrains Mono', monospace" } }, "Upcoming"),
+                upcoming.length === 0 ? (React.createElement("div", { className: "text-sm py-6 text-center", style: { color: COLORS.creamDim } }, "Nothing scheduled. Add a task from the calendar or spray planner.")) : (React.createElement("div", { className: "space-y-2" }, upcoming.map((u) => (React.createElement("div", { key: u.id, className: "flex items-center justify-between py-2 border-b last:border-0", style: { borderColor: "#3A3C31" } },
+                    React.createElement("div", null,
+                        React.createElement("div", { className: "text-sm", style: { color: COLORS.cream } }, u.title),
+                        React.createElement("div", { className: "text-xs", style: { color: u.overdue ? COLORS.danger : COLORS.creamDim } },
+                            u.overdue ? "Overdue · " : "",
+                            fmtDate(u.date))),
+                    React.createElement("div", { className: "text-xs px-2 py-1 rounded-full", style: {
+                            background: u.overdue ? "rgba(198,81,47,0.18)" : u.kind === "spray" ? "rgba(108,138,90,0.2)" : "rgba(201,154,62,0.2)",
+                            color: u.overdue ? COLORS.danger : u.kind === "spray" ? COLORS.leaf : COLORS.gold,
+                        } }, u.overdue ? "Overdue" : u.kind === "spray" ? "Spray plan" : "Event")))))),
+                React.createElement("div", { className: "grid grid-cols-2 gap-3 mt-4 pt-4", style: { borderTop: "1px solid #3A3C31" } },
+                    React.createElement("div", null,
+                        React.createElement("div", { className: "text-2xl", style: { fontFamily: "'Fraunces', serif", color: COLORS.cream } }, inr(totalSpend)),
+                        React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } }, "Season spend to date")),
+                    React.createElement("div", null,
+                        React.createElement("div", { className: "text-2xl", style: { fontFamily: "'Fraunces', serif", color: lowStock.length ? COLORS.danger : COLORS.leaf } }, lowStock.length),
+                        React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } }, "Items low on stock"))))),
+        lowStock.length > 0 && (React.createElement(Card, { className: "p-4" },
+            React.createElement("div", { className: "flex items-center gap-2 mb-2" },
+                React.createElement(Icon, { name: "alert", size: 16, color: COLORS.danger }),
+                React.createElement("span", { className: "text-sm", style: { color: COLORS.cream } }, "Reorder soon")),
+            React.createElement("div", { className: "flex flex-wrap gap-2" }, lowStock.map((i) => (React.createElement("span", { key: i.id, className: "text-xs px-2.5 py-1 rounded-full", style: { background: "rgba(198,81,47,0.15)", color: COLORS.danger } },
+                i.name,
+                " \u2014 ",
+                i.qty,
+                i.unit,
+                " left")))),
+            React.createElement("button", { className: "text-xs mt-3 underline", style: { color: COLORS.gold }, onClick: () => setActiveTab("inventory") }, "Go to inventory \u2192")))));
+}
+// ---------- Calendar ----------
+function CalendarView({ data, mutate }) {
+    const [cursor, setCursor] = useState(new Date());
+    const [modal, setModal] = useState(null); // {date} or null
+    const [form, setForm] = useState({ title: "", type: "task", notes: "" });
+    const year = cursor.getFullYear();
+    const month = cursor.getMonth();
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const eventsByDate = useMemo(() => {
+        const map = {};
+        data.events.forEach((e) => {
+            map[e.date] = map[e.date] || [];
+            map[e.date].push(e);
+        });
+        data.sprays.forEach((s) => {
+            map[s.date] = map[s.date] || [];
+            map[s.date].push({ id: s.id, date: s.date, title: `${s.type === "spray" ? "🌿" : "💧"} ${s.productName}`, isSpray: true, sprayStatus: s.status });
+        });
+        return map;
+    }, [data]);
+    // tasks not marked done whose date has already passed — these stay visible until
+    // handled instead of silently disappearing off the calendar.
+    const overdue = useMemo(() => data.events.filter((e) => !e.done && e.date < todayStr()).sort((a, b) => a.date.localeCompare(b.date)), [data.events]);
+    const todayAndAhead = useMemo(() => [
+        ...data.events.filter((e) => !e.done && e.date >= todayStr()).map((e) => ({ ...e })),
+        ...data.sprays.filter((s) => s.status === "planned" && s.date >= todayStr()).map((s) => ({ id: s.id, date: s.date, title: `${s.type === "spray" ? "Spray" : "Fertigation"}: ${s.productName}` })),
+    ]
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .slice(0, 6), [data]);
+    const cells = [];
+    for (let i = 0; i < firstDay; i++)
+        cells.push(null);
+    for (let d = 1; d <= daysInMonth; d++)
+        cells.push(d);
+    const openDay = (d) => {
+        const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+        setModal(dateStr);
+        setForm({ title: "", type: "task", notes: "" });
+    };
+    const addEvent = () => {
+        if (!form.title.trim())
+            return;
+        const newEvent = { id: uid(), date: modal, title: form.title.trim(), type: form.type, notes: form.notes, done: false };
+        mutate((d) => ({ ...d, events: [...d.events, newEvent] }));
+        setModal(null);
+    };
+    const removeEvent = (id) => {
+        mutate((d) => ({ ...d, events: d.events.filter((e) => e.id !== id) }));
+    };
+    const toggleDone = (id) => {
+        mutate((d) => ({ ...d, events: d.events.map((e) => (e.id === id ? { ...e, done: !e.done } : e)) }));
+    };
+    return (React.createElement("div", { className: "space-y-4" },
+        React.createElement(SectionTitle, { eyebrow: "Field diary", title: "Calendar", right: React.createElement("div", { className: "flex items-center gap-2" },
+                React.createElement("button", { onClick: () => setCursor(new Date(year, month - 1, 1)), style: { color: COLORS.creamDim } },
+                    React.createElement(Icon, { name: "chevronleft", size: 20 })),
+                React.createElement("span", { className: "text-sm w-28 text-center", style: { color: COLORS.cream, fontFamily: "'JetBrains Mono', monospace" } },
+                    MONTH_NAMES[month],
+                    " ",
+                    year),
+                React.createElement("button", { onClick: () => setCursor(new Date(year, month + 1, 1)), style: { color: COLORS.creamDim } },
+                    React.createElement(Icon, { name: "chevronright", size: 20 }))) }),
+        overdue.length > 0 && (React.createElement(Card, { className: "p-4", style: { borderColor: COLORS.danger } },
+            React.createElement("div", { className: "flex items-center gap-2 mb-2" },
+                React.createElement(Icon, { name: "alert", size: 16, color: COLORS.danger }),
+                React.createElement("span", { className: "text-sm", style: { color: COLORS.cream } }, "Overdue \u2014 not marked done")),
+            React.createElement("div", { className: "space-y-1.5" }, overdue.map((e) => (React.createElement("div", { key: e.id, className: "flex items-center justify-between text-sm" },
+                React.createElement("span", { style: { color: statusColor(e) } },
+                    e.title,
+                    " ",
+                    React.createElement("span", { style: { color: COLORS.creamDim } },
+                        "\u00B7 ",
+                        fmtDate(e.date))),
+                React.createElement("div", { className: "flex gap-2 shrink-0 ml-2" },
+                    React.createElement("button", { onClick: () => toggleDone(e.id), title: "Mark done" },
+                        React.createElement(Icon, { name: "check", size: 15, color: COLORS.leaf })),
+                    React.createElement("button", { onClick: () => removeEvent(e.id), title: "Remove" },
+                        React.createElement(Icon, { name: "trash", size: 13, color: COLORS.creamDim }))))))))),
+        todayAndAhead.length > 0 && (React.createElement(Card, { className: "p-4" },
+            React.createElement("div", { className: "text-xs mb-2 tracking-widest uppercase", style: { color: COLORS.creamDim, fontFamily: "'JetBrains Mono', monospace" } }, "Today & upcoming"),
+            React.createElement("div", { className: "space-y-1.5" }, todayAndAhead.map((e) => (React.createElement("div", { key: e.id, className: "flex items-center justify-between text-sm" },
+                React.createElement("span", { style: { color: statusColor(e) } }, e.title),
+                React.createElement("span", { style: { color: COLORS.creamDim } }, e.date === todayStr() ? "Today" : fmtDate(e.date)))))))),
+        React.createElement(Card, { className: "p-3 sm:p-5" },
+            React.createElement("div", { className: "grid grid-cols-7 gap-1 mb-2 text-center text-xs", style: { color: COLORS.creamDim } }, ["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (React.createElement("div", { key: i }, d)))),
+            React.createElement("div", { className: "grid grid-cols-7 gap-1" }, cells.map((d, i) => {
+                if (!d)
+                    return React.createElement("div", { key: i });
+                const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+                const isToday = dateStr === todayStr();
+                const isPast = dateStr < todayStr();
+                const dayEvents = eventsByDate[dateStr] || [];
+                const hasUndone = dayEvents.some((e) => !e.isSpray && !e.done);
+                return (React.createElement("button", { key: i, onClick: () => openDay(d), className: "min-h-[3.4rem] sm:min-h-[4rem] rounded-lg flex flex-col items-start p-1 text-xs relative overflow-hidden", style: {
+                        background: isToday ? "rgba(177,42,66,0.25)" : "#1B1C17",
+                        border: isPast && hasUndone ? `1px solid ${COLORS.danger}` : isToday ? `1px solid ${COLORS.ruby}` : "1px solid transparent",
+                        color: COLORS.cream,
+                    } },
+                    React.createElement("span", { className: "self-center" }, d),
+                    React.createElement("div", { className: "w-full mt-0.5 space-y-0.5" },
+                        dayEvents.slice(0, 2).map((e, idx) => {
+                            const sc = statusColor(e);
+                            return (React.createElement("div", { key: idx, className: "text-[8px] sm:text-[9px] leading-tight rounded px-1 truncate w-full text-left", style: {
+                                    background: `${sc}22`,
+                                    color: sc,
+                                    textDecoration: e.done || (e.isSpray && e.sprayStatus === "done") ? "line-through" : "none",
+                                }, title: e.title }, e.title));
+                        }),
+                        dayEvents.length > 2 && (React.createElement("div", { className: "text-[8px]", style: { color: COLORS.creamDim } },
+                            "+",
+                            dayEvents.length - 2,
+                            " more")))));
+            }))),
+        React.createElement(Modal, { open: !!modal, onClose: () => setModal(null), title: modal ? fmtDate(modal) : "" },
+            React.createElement("div", { className: "space-y-3 mb-4" }, (eventsByDate[modal] || []).map((e) => (React.createElement("div", { key: e.id, className: "flex items-center justify-between text-sm p-2 rounded-lg", style: { background: "#1B1C17" } },
+                React.createElement("div", null,
+                    React.createElement("span", { style: { color: statusColor(e), textDecoration: e.done || (e.isSpray && e.sprayStatus === "done") ? "line-through" : "none" } }, e.title),
+                    !e.isSpray && React.createElement("div", { className: "text-[10px]", style: { color: COLORS.creamDim } }, eventTypeLabel(e.type))),
+                !e.isSpray && (React.createElement("div", { className: "flex gap-2" },
+                    React.createElement("button", { onClick: () => toggleDone(e.id) },
+                        React.createElement(Icon, { name: "check", size: 16, color: COLORS.leaf })),
+                    React.createElement("button", { onClick: () => removeEvent(e.id) },
+                        React.createElement(Icon, { name: "trash", size: 16, color: COLORS.danger })))))))),
+            React.createElement("div", { className: "space-y-3" },
+                React.createElement(Field, { label: "Add a task or note" },
+                    React.createElement("input", { className: inputClass, style: inputStyle, value: form.title, onChange: (e) => setForm({ ...form, title: e.target.value }), placeholder: "e.g. Check drip lines" })),
+                React.createElement(Field, { label: "Type" },
+                    React.createElement("select", { className: inputClass, style: inputStyle, value: form.type, onChange: (e) => setForm({ ...form, type: e.target.value }) }, EVENT_TYPES.map((t) => React.createElement("option", { key: t.key, value: t.key }, t.label)))),
+                React.createElement(Btn, { onClick: addEvent, className: "w-full" },
+                    React.createElement(Icon, { name: "plus", size: 16 }),
+                    " Add to ",
+                    modal && fmtDate(modal))))));
+}
+// ---------- Inventory ----------
+function InventoryView({ data, mutate }) {
+    const [modal, setModal] = useState(false);
+    const [form, setForm] = useState({ name: "", category: "Fertilizer", qty: "", unit: "kg", reorderLevel: "", costPerUnit: "" });
+    const addItem = () => {
+        if (!form.name.trim())
+            return;
+        const item = {
+            id: uid(),
+            name: form.name.trim(),
+            category: form.category,
+            qty: parseFloat(form.qty) || 0,
+            unit: form.unit,
+            reorderLevel: parseFloat(form.reorderLevel) || 0,
+            costPerUnit: parseFloat(form.costPerUnit) || 0,
+        };
+        mutate((d) => ({ ...d, inventory: [...d.inventory, item] }));
+        setModal(false);
+        setForm({ name: "", category: "Fertilizer", qty: "", unit: "kg", reorderLevel: "", costPerUnit: "" });
+    };
+    const adjustQty = (id, delta) => {
+        mutate((d) => ({
+            ...d,
+            inventory: d.inventory.map((i) => (i.id === id ? { ...i, qty: Math.max(0, +(i.qty + delta).toFixed(2)) } : i)),
+        }));
+    };
+    const removeItem = (id) => mutate((d) => ({ ...d, inventory: d.inventory.filter((i) => i.id !== id) }));
+    return (React.createElement("div", { className: "space-y-4" },
+        React.createElement(SectionTitle, { eyebrow: "Store room", title: "Inventory", right: React.createElement(Btn, { onClick: () => setModal(true) },
+                React.createElement(Icon, { name: "plus", size: 16 }),
+                " Add item") }),
+        React.createElement("div", { className: "grid sm:grid-cols-2 gap-3" }, data.inventory.map((i) => {
+            const low = i.qty <= i.reorderLevel;
+            return (React.createElement(Card, { key: i.id, className: "p-4" },
+                React.createElement("div", { className: "flex justify-between items-start" },
+                    React.createElement("div", null,
+                        React.createElement("div", { className: "text-sm", style: { color: COLORS.cream, fontWeight: 600 } }, i.name),
+                        React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } }, i.category)),
+                    React.createElement("button", { onClick: () => removeItem(i.id) },
+                        React.createElement(Icon, { name: "trash", size: 14, color: COLORS.creamDim }))),
+                React.createElement("div", { className: "flex items-center justify-between mt-3" },
+                    React.createElement("div", { className: "flex items-center gap-2" },
+                        React.createElement("button", { onClick: () => adjustQty(i.id, -1), className: "w-7 h-7 rounded-full flex items-center justify-center", style: { background: "#1B1C17", color: COLORS.cream } }, "-"),
+                        React.createElement("span", { style: { color: low ? COLORS.danger : COLORS.cream, fontFamily: "'JetBrains Mono', monospace" } },
+                            i.qty,
+                            " ",
+                            i.unit),
+                        React.createElement("button", { onClick: () => adjustQty(i.id, 1), className: "w-7 h-7 rounded-full flex items-center justify-center", style: { background: "#1B1C17", color: COLORS.cream } }, "+")),
+                    React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } },
+                        inr(i.costPerUnit),
+                        "/",
+                        i.unit)),
+                low && (React.createElement("div", { className: "text-xs mt-2 flex items-center gap-1", style: { color: COLORS.danger } },
+                    React.createElement(Icon, { name: "alert", size: 12 }),
+                    " Below reorder level (",
+                    i.reorderLevel,
+                    " ",
+                    i.unit,
+                    ")"))));
+        })),
+        React.createElement(Modal, { open: modal, onClose: () => setModal(false), title: "New inventory item" },
+            React.createElement("div", { className: "space-y-3" },
+                React.createElement(Field, { label: "Name" },
+                    React.createElement("input", { className: inputClass, style: inputStyle, value: form.name, onChange: (e) => setForm({ ...form, name: e.target.value }), placeholder: "e.g. Urea" })),
+                React.createElement("div", { className: "grid grid-cols-2 gap-3" },
+                    React.createElement(Field, { label: "Category" },
+                        React.createElement("select", { className: inputClass, style: inputStyle, value: form.category, onChange: (e) => setForm({ ...form, category: e.target.value }) }, CATEGORIES.map((c) => React.createElement("option", { key: c }, c)))),
+                    React.createElement(Field, { label: "Unit" },
+                        React.createElement("select", { className: inputClass, style: inputStyle, value: form.unit, onChange: (e) => setForm({ ...form, unit: e.target.value }) }, UNITS.map((u) => React.createElement("option", { key: u }, u))))),
+                React.createElement("div", { className: "grid grid-cols-2 gap-3" },
+                    React.createElement(Field, { label: "Quantity on hand" },
+                        React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: form.qty, onChange: (e) => setForm({ ...form, qty: e.target.value }) })),
+                    React.createElement(Field, { label: "Reorder below" },
+                        React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: form.reorderLevel, onChange: (e) => setForm({ ...form, reorderLevel: e.target.value }) }))),
+                React.createElement(Field, { label: "Cost per unit (\u20B9)" },
+                    React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: form.costPerUnit, onChange: (e) => setForm({ ...form, costPerUnit: e.target.value }) })),
+                React.createElement(Btn, { onClick: addItem, className: "w-full" }, "Save item")))));
+}
+// ---------- Spray & Fertigation Planner ----------
+function SprayPlanner({ data, mutate }) {
+    const cycleDef = resolveCycle(data);
+    const stages = useMemo(() => getStages(cycleDef.shift), [cycleDef.shift]);
+    const [modal, setModal] = useState(false);
+    const [form, setForm] = useState({ date: todayStr(), type: "spray", inventoryId: "", quantity: "", stage: stages[0].key, notes: "" });
+    const addPlan = () => {
+        const item = data.inventory.find((i) => i.id === form.inventoryId);
+        if (!item)
+            return;
+        const plan = {
+            id: uid(),
+            date: form.date,
+            type: form.type,
+            inventoryId: item.id,
+            productName: item.name,
+            quantity: parseFloat(form.quantity) || 0,
+            unit: item.unit,
+            stage: form.stage,
+            status: "planned",
+            notes: form.notes,
+            cost: 0,
+        };
+        mutate((d) => ({ ...d, sprays: [...d.sprays, plan] }));
+        setModal(false);
+        setForm({ date: todayStr(), type: "spray", inventoryId: "", quantity: "", stage: stages[0].key, notes: "" });
+    };
+    const markDone = (id) => {
+        mutate((d) => {
+            const plan = d.sprays.find((s) => s.id === id);
+            if (!plan)
+                return d;
+            const item = d.inventory.find((i) => i.id === plan.inventoryId);
+            const cost = item ? item.costPerUnit * plan.quantity : 0;
+            return {
+                ...d,
+                sprays: d.sprays.map((s) => (s.id === id ? { ...s, status: "done", cost } : s)),
+                inventory: item ? d.inventory.map((i) => (i.id === item.id ? { ...i, qty: Math.max(0, +(i.qty - plan.quantity).toFixed(2)) } : i)) : d.inventory,
+            };
+        });
+    };
+    const markSkipped = (id) => mutate((d) => ({ ...d, sprays: d.sprays.map((s) => (s.id === id ? { ...s, status: "skipped" } : s)) }));
+    const removePlan = (id) => mutate((d) => ({ ...d, sprays: d.sprays.filter((s) => s.id !== id) }));
+    const sorted = [...data.sprays].sort((a, b) => b.date.localeCompare(a.date));
+    return (React.createElement("div", { className: "space-y-4" },
+        React.createElement(SectionTitle, { eyebrow: "Stage-linked schedule", title: "Spray & Fertigation", right: React.createElement(Btn, { onClick: () => setModal(true) },
+                React.createElement(Icon, { name: "plus", size: 16 }),
+                " Plan") }),
+        React.createElement(Card, { className: "p-4" },
+            React.createElement("div", { className: "text-xs mb-2", style: { color: COLORS.creamDim } },
+                "Ethrel induction window (",
+                cycleDef.label,
+                ")"),
+            React.createElement("div", { className: "text-sm", style: { color: COLORS.cream } },
+                "For ",
+                cycleDef.label,
+                " (",
+                describeCycle(cycleDef.shift),
+                "), time the Ethephon spray to defoliate and induce uniform flowering after a light irrigation stress period. Avoid spraying if rain is forecast within 24 hours. You can change your bahar cycle or add a new one any time in Settings.")),
+        React.createElement("div", { className: "space-y-2" },
+            sorted.length === 0 && (React.createElement("div", { className: "text-sm text-center py-8", style: { color: COLORS.creamDim } }, "No spray or fertigation plans yet.")),
+            sorted.map((s) => {
+                var _a;
+                return (React.createElement(Card, { key: s.id, className: "p-4 flex items-center justify-between flex-wrap gap-2" },
+                    React.createElement("div", { className: "flex items-center gap-3" },
+                        React.createElement("div", { className: "w-9 h-9 rounded-full flex items-center justify-center shrink-0", style: { background: s.type === "spray" ? "rgba(108,138,90,0.2)" : "rgba(201,154,62,0.2)" } },
+                            React.createElement(Icon, { name: "spray", size: 16, color: s.type === "spray" ? COLORS.leaf : COLORS.gold })),
+                        React.createElement("div", null,
+                            React.createElement("div", { className: "text-sm", style: { color: COLORS.cream } },
+                                s.productName,
+                                " \u2014 ",
+                                s.quantity,
+                                s.unit),
+                            React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } },
+                                fmtDate(s.date),
+                                " \u00B7 ", (_a = stages.find((x) => x.key === s.stage)) === null || _a === void 0 ? void 0 :
+                                _a.label))),
+                    React.createElement("div", { className: "flex items-center gap-2" },
+                        React.createElement("span", { className: "text-xs px-2 py-1 rounded-full", style: {
+                                background: s.status === "done" ? "rgba(108,138,90,0.2)" : s.status === "skipped" ? "rgba(198,81,47,0.15)" : "rgba(201,154,62,0.15)",
+                                color: s.status === "done" ? COLORS.leaf : s.status === "skipped" ? COLORS.danger : COLORS.gold,
+                            } }, s.status),
+                        s.status === "planned" && (React.createElement(React.Fragment, null,
+                            React.createElement("button", { onClick: () => markDone(s.id), title: "Mark done" },
+                                React.createElement(Icon, { name: "check", size: 16, color: COLORS.leaf })),
+                            React.createElement("button", { onClick: () => markSkipped(s.id), title: "Skip" },
+                                React.createElement(Icon, { name: "x", size: 16, color: COLORS.danger })))),
+                        React.createElement("button", { onClick: () => removePlan(s.id) },
+                            React.createElement(Icon, { name: "trash", size: 14, color: COLORS.creamDim })))));
+            })),
+        React.createElement(Modal, { open: modal, onClose: () => setModal(false), title: "New spray / fertigation plan" },
+            React.createElement("div", { className: "space-y-3" },
+                React.createElement("div", { className: "grid grid-cols-2 gap-3" },
+                    React.createElement(Field, { label: "Date" },
+                        React.createElement("input", { type: "date", className: inputClass, style: inputStyle, value: form.date, onChange: (e) => setForm({ ...form, date: e.target.value }) })),
+                    React.createElement(Field, { label: "Type" },
+                        React.createElement("select", { className: inputClass, style: inputStyle, value: form.type, onChange: (e) => setForm({ ...form, type: e.target.value }) },
+                            React.createElement("option", { value: "spray" }, "Foliar Spray"),
+                            React.createElement("option", { value: "fertigation" }, "Fertigation")))),
+                React.createElement(Field, { label: "Product (from inventory)" },
+                    React.createElement("select", { className: inputClass, style: inputStyle, value: form.inventoryId, onChange: (e) => setForm({ ...form, inventoryId: e.target.value }) },
+                        React.createElement("option", { value: "" }, "Select\u2026"),
+                        data.inventory.map((i) => React.createElement("option", { key: i.id, value: i.id },
+                            i.name,
+                            " (",
+                            i.qty,
+                            i.unit,
+                            " in stock)")))),
+                React.createElement("div", { className: "grid grid-cols-2 gap-3" },
+                    React.createElement(Field, { label: "Quantity to use" },
+                        React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: form.quantity, onChange: (e) => setForm({ ...form, quantity: e.target.value }) })),
+                    React.createElement(Field, { label: "Crop stage" },
+                        React.createElement("select", { className: inputClass, style: inputStyle, value: form.stage, onChange: (e) => setForm({ ...form, stage: e.target.value }) }, stages.map((s) => React.createElement("option", { key: s.key, value: s.key }, s.label))))),
+                React.createElement(Field, { label: "Notes" },
+                    React.createElement("input", { className: inputClass, style: inputStyle, value: form.notes, onChange: (e) => setForm({ ...form, notes: e.target.value }), placeholder: "Dose rate, tank mix, etc." })),
+                React.createElement(Btn, { onClick: addPlan, className: "w-full", disabled: !form.inventoryId }, "Save plan")))));
+}
+// ---------- Weather ----------
+function WeatherView({ data, mutate }) {
+    const [forecast, setForecast] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const [manual, setManual] = useState({ tempMax: "", tempMin: "", rainfall: "", humidity: "" });
+    const fetchForecast = useCallback(async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const { lat, lon } = data.settings;
+            const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max&timezone=auto&forecast_days=7`;
+            const res = await fetch(url);
+            if (!res.ok)
+                throw new Error("Weather service unavailable");
+            const json = await res.json();
+            setForecast(json);
+        }
+        catch (e) {
+            setError("Couldn't reach the live weather service. You can still log readings manually below.");
+        }
+        finally {
+            setLoading(false);
+        }
+    }, [data.settings]);
+    useEffect(() => {
+        fetchForecast();
+    }, [fetchForecast]);
+    const logManual = () => {
+        const entry = { date: todayStr(), tempMax: parseFloat(manual.tempMax) || null, tempMin: parseFloat(manual.tempMin) || null, rainfall: parseFloat(manual.rainfall) || 0, humidity: parseFloat(manual.humidity) || null, source: "manual" };
+        mutate((d) => ({ ...d, weatherLogs: [...d.weatherLogs.filter((w) => w.date !== todayStr()), entry] }));
+        setManual({ tempMax: "", tempMin: "", rainfall: "", humidity: "" });
+    };
+    const rainNext48h = forecast ? (forecast.daily.precipitation_sum[0] + forecast.daily.precipitation_sum[1]) : 0;
+    const sprayAdvisory = rainNext48h > 5 ? "Hold off on spraying — meaningful rain expected in the next 48 hours." : "Conditions look workable for spraying in the next 48 hours.";
+    const history = [...data.weatherLogs].sort((a, b) => a.date.localeCompare(b.date)).slice(-14);
+    return (React.createElement("div", { className: "space-y-4" },
+        React.createElement(SectionTitle, { eyebrow: data.settings.place, title: "Weather", right: React.createElement(Btn, { variant: "ghost", onClick: fetchForecast }, loading ? "Refreshing…" : "Refresh") }),
+        error && (React.createElement(Card, { className: "p-4 text-sm", style: { color: COLORS.danger, borderColor: COLORS.danger } }, error)),
+        forecast && (React.createElement(React.Fragment, null,
+            React.createElement(Card, { className: "p-4" },
+                React.createElement("div", { className: "flex items-center gap-2 mb-1" },
+                    React.createElement(Icon, { name: "cloudsun", size: 16, color: COLORS.gold }),
+                    React.createElement("span", { className: "text-sm", style: { color: COLORS.cream } }, sprayAdvisory))),
+            React.createElement("div", { className: "grid grid-cols-3 sm:grid-cols-7 gap-2" }, forecast.daily.time.map((t, idx) => (React.createElement(Card, { key: t, className: "p-3 text-center" },
+                React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } }, new Date(t).toLocaleDateString("en-IN", { weekday: "short" })),
+                React.createElement("div", { className: "text-sm mt-1", style: { color: COLORS.cream, fontFamily: "'JetBrains Mono', monospace" } },
+                    Math.round(forecast.daily.temperature_2m_max[idx]),
+                    "\u00B0 / ",
+                    Math.round(forecast.daily.temperature_2m_min[idx]),
+                    "\u00B0"),
+                React.createElement("div", { className: "text-xs mt-1 flex items-center justify-center gap-1", style: { color: COLORS.leaf } },
+                    React.createElement(Icon, { name: "weather", size: 11 }),
+                    " ",
+                    forecast.daily.precipitation_sum[idx],
+                    "mm"))))))),
+        React.createElement(Card, { className: "p-4" },
+            React.createElement("div", { className: "text-sm mb-3", style: { color: COLORS.cream } }, "Log today's field reading manually"),
+            React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-4 gap-3" },
+                React.createElement(Field, { label: "Max \u00B0C" },
+                    React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: manual.tempMax, onChange: (e) => setManual({ ...manual, tempMax: e.target.value }) })),
+                React.createElement(Field, { label: "Min \u00B0C" },
+                    React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: manual.tempMin, onChange: (e) => setManual({ ...manual, tempMin: e.target.value }) })),
+                React.createElement(Field, { label: "Rain (mm)" },
+                    React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: manual.rainfall, onChange: (e) => setManual({ ...manual, rainfall: e.target.value }) })),
+                React.createElement(Field, { label: "Humidity %" },
+                    React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: manual.humidity, onChange: (e) => setManual({ ...manual, humidity: e.target.value }) }))),
+            React.createElement(Btn, { className: "mt-3", onClick: logManual }, "Save reading")),
+        history.length > 0 && (React.createElement(Card, { className: "p-4" },
+            React.createElement("div", { className: "text-sm mb-3", style: { color: COLORS.cream } }, "Rainfall log"),
+            React.createElement(SimpleLineChart, { data: history, xKey: "date", yKey: "rainfall", color: COLORS.leaf, height: 200, formatX: (d) => d.slice(5), unit: "mm" })))));
+}
+// ---------- Analytics ----------
+function AnalyticsView({ data, mutate }) {
+    const [form, setForm] = useState({ season: "Hasta Bahar", year: new Date().getFullYear(), yieldKg: "", pricePerKg: "" });
+    const spendByCategory = useMemo(() => {
+        const map = {};
+        data.sprays.filter((s) => s.status === "done").forEach((s) => {
+            const item = data.inventory.find((i) => i.id === s.inventoryId);
+            const cat = item ? item.category : "Other";
+            map[cat] = (map[cat] || 0) + (s.cost || 0);
+        });
+        return Object.entries(map).map(([name, value]) => ({ name, value }));
+    }, [data]);
+    const monthlySpend = useMemo(() => {
+        const map = {};
+        data.sprays.filter((s) => s.status === "done").forEach((s) => {
+            const key = s.date.slice(0, 7);
+            map[key] = (map[key] || 0) + (s.cost || 0);
+        });
+        return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([month, spend]) => ({ month, spend }));
+    }, [data]);
+    const completion = useMemo(() => {
+        const total = data.sprays.length;
+        const done = data.sprays.filter((s) => s.status === "done").length;
+        return total ? Math.round((done / total) * 100) : 0;
+    }, [data]);
+    const totalSpend = data.sprays.filter((s) => s.status === "done").reduce((a, s) => a + (s.cost || 0), 0);
+    const totalRevenue = data.yieldRecords.reduce((a, y) => a + y.yieldKg * y.pricePerKg, 0);
+    const addYield = () => {
+        if (!form.yieldKg)
+            return;
+        const rec = { id: uid(), season: form.season, year: form.year, yieldKg: parseFloat(form.yieldKg), pricePerKg: parseFloat(form.pricePerKg) || 0 };
+        mutate((d) => ({ ...d, yieldRecords: [...d.yieldRecords, rec] }));
+        setForm({ season: "Hasta Bahar", year: new Date().getFullYear(), yieldKg: "", pricePerKg: "" });
+    };
+    return (React.createElement("div", { className: "space-y-4" },
+        React.createElement(SectionTitle, { eyebrow: "Season performance", title: "Analytics" }),
+        React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-4 gap-3" }, [
+            ["Total spend", inr(totalSpend)],
+            ["Total revenue", inr(totalRevenue)],
+            ["Net", inr(totalRevenue - totalSpend)],
+            ["Plan completion", completion + "%"],
+        ].map(([label, val]) => (React.createElement(Card, { key: label, className: "p-4" },
+            React.createElement("div", { className: "text-lg sm:text-xl", style: { fontFamily: "'Fraunces', serif", color: COLORS.cream } }, val),
+            React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } }, label))))),
+        data.yieldRecords.length > 0 && (React.createElement(Card, { className: "p-4" },
+            React.createElement("div", { className: "text-sm mb-3", style: { color: COLORS.cream } }, "Yield by season"),
+            React.createElement(SimpleBarChart, { data: data.yieldRecords.map((y) => ({ name: `${y.season} ${y.year}`, kg: y.yieldKg })), xKey: "name", yKey: "kg", color: COLORS.ruby, height: 220, unit: "kg" }))),
+        React.createElement("div", { className: "grid sm:grid-cols-2 gap-4" },
+            monthlySpend.length > 0 && (React.createElement(Card, { className: "p-4" },
+                React.createElement("div", { className: "text-sm mb-3", style: { color: COLORS.cream } }, "Monthly spend"),
+                React.createElement(SimpleLineChart, { data: monthlySpend, xKey: "month", yKey: "spend", color: COLORS.gold, height: 200, unit: "\u20B9" }))),
+            spendByCategory.length > 0 && (React.createElement(Card, { className: "p-4" },
+                React.createElement("div", { className: "text-sm mb-3", style: { color: COLORS.cream } }, "Spend by category"),
+                React.createElement(SimplePieChart, { data: spendByCategory, colors: PIE_COLORS, height: 200 })))),
+        React.createElement(Card, { className: "p-4" },
+            React.createElement("div", { className: "text-sm mb-3", style: { color: COLORS.cream } }, "Record a season's yield"),
+            React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-4 gap-3" },
+                React.createElement(Field, { label: "Season" },
+                    React.createElement("input", { className: inputClass, style: inputStyle, value: form.season, onChange: (e) => setForm({ ...form, season: e.target.value }) })),
+                React.createElement(Field, { label: "Year" },
+                    React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: form.year, onChange: (e) => setForm({ ...form, year: e.target.value }) })),
+                React.createElement(Field, { label: "Yield (kg)" },
+                    React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: form.yieldKg, onChange: (e) => setForm({ ...form, yieldKg: e.target.value }) })),
+                React.createElement(Field, { label: "Price/kg (\u20B9)" },
+                    React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: form.pricePerKg, onChange: (e) => setForm({ ...form, pricePerKg: e.target.value }) }))),
+            React.createElement(Btn, { className: "mt-3", onClick: addYield }, "Add record"))));
+}
+// ---------- Field Visits ----------
+const VISIT_TAGS = ["General", "Pest sighting", "Disease", "Irrigation", "Growth stage", "Weather damage"];
+const VISIT_TAG_COLORS = {
+    General: COLORS.creamDim,
+    "Pest sighting": COLORS.danger,
+    Disease: COLORS.danger,
+    Irrigation: COLORS.leaf,
+    "Growth stage": COLORS.gold,
+    "Weather damage": COLORS.ruby,
+};
+function FieldVisitsView({ data, mutate }) {
+    const [modal, setModal] = useState(false);
+    const [form, setForm] = useState({ date: todayStr(), tag: "General", plot: "", notes: "" });
+    const addVisit = () => {
+        if (!form.notes.trim())
+            return;
+        const visit = { id: uid(), date: form.date, tag: form.tag, plot: form.plot.trim(), notes: form.notes.trim() };
+        mutate((d) => ({ ...d, fieldVisits: [...d.fieldVisits, visit] }));
+        setModal(false);
+        setForm({ date: todayStr(), tag: "General", plot: "", notes: "" });
+    };
+    const removeVisit = (id) => mutate((d) => ({ ...d, fieldVisits: d.fieldVisits.filter((v) => v.id !== id) }));
+    const sorted = [...data.fieldVisits].sort((a, b) => b.date.localeCompare(a.date));
+    return (React.createElement("div", { className: "space-y-4" },
+        React.createElement(SectionTitle, { eyebrow: "Walk the orchard", title: "Field Visits", right: React.createElement(Btn, { onClick: () => setModal(true) },
+                React.createElement(Icon, { name: "plus", size: 16 }),
+                " Log visit") }),
+        React.createElement("div", { className: "space-y-2" },
+            sorted.length === 0 && (React.createElement("div", { className: "text-sm text-center py-8", style: { color: COLORS.creamDim } }, "No field visits logged yet. Note what you see on your next walk-through \u2014 pest pressure, flowering, irrigation issues.")),
+            sorted.map((v) => (React.createElement(Card, { key: v.id, className: "p-4" },
+                React.createElement("div", { className: "flex items-start justify-between gap-3" },
+                    React.createElement("div", { className: "flex items-center gap-2" },
+                        React.createElement("span", { className: "text-xs px-2 py-1 rounded-full shrink-0", style: { background: `${VISIT_TAG_COLORS[v.tag] || COLORS.creamDim}22`, color: VISIT_TAG_COLORS[v.tag] || COLORS.creamDim } }, v.tag),
+                        React.createElement("span", { className: "text-xs", style: { color: COLORS.creamDim } }, fmtDate(v.date)),
+                        v.plot && React.createElement("span", { className: "text-xs", style: { color: COLORS.creamDim } },
+                            "\u00B7 ",
+                            v.plot)),
+                    React.createElement("button", { onClick: () => removeVisit(v.id) },
+                        React.createElement(Icon, { name: "trash", size: 14, color: COLORS.creamDim }))),
+                React.createElement("div", { className: "text-sm mt-2 whitespace-pre-wrap", style: { color: COLORS.cream } }, v.notes))))),
+        React.createElement(Modal, { open: modal, onClose: () => setModal(false), title: "Log a field visit" },
+            React.createElement("div", { className: "space-y-3" },
+                React.createElement("div", { className: "grid grid-cols-2 gap-3" },
+                    React.createElement(Field, { label: "Date" },
+                        React.createElement("input", { type: "date", className: inputClass, style: inputStyle, value: form.date, onChange: (e) => setForm({ ...form, date: e.target.value }) })),
+                    React.createElement(Field, { label: "Category" },
+                        React.createElement("select", { className: inputClass, style: inputStyle, value: form.tag, onChange: (e) => setForm({ ...form, tag: e.target.value }) }, VISIT_TAGS.map((t) => React.createElement("option", { key: t }, t))))),
+                React.createElement(Field, { label: "Plot / block (optional)" },
+                    React.createElement("input", { className: inputClass, style: inputStyle, value: form.plot, onChange: (e) => setForm({ ...form, plot: e.target.value }), placeholder: "e.g. North block, row 3" })),
+                React.createElement(Field, { label: "Notes" },
+                    React.createElement("textarea", { className: inputClass, style: { ...inputStyle, minHeight: "100px", resize: "vertical" }, value: form.notes, onChange: (e) => setForm({ ...form, notes: e.target.value }), placeholder: "What did you see? Any action needed?" })),
+                React.createElement(Btn, { onClick: addVisit, className: "w-full", disabled: !form.notes.trim() }, "Save visit")))));
+}
+// ---------- Settings ----------
+function SettingsView({ data, mutate, onExport, onImport, onExportExcel, onPrintReport }) {
+    const [local, setLocal] = useState(data.settings);
+    const fileRef = useRef(null);
+    const [cycleModal, setCycleModal] = useState(false);
+    const [cycleForm, setCycleForm] = useState({ label: "", month: 6 }); // default July, matching a mid-year Ethrel spray
+    const save = () => mutate((d) => ({ ...d, settings: local }));
+    const requestNotif = async () => {
+        if (!("Notification" in window))
+            return;
+        const perm = await Notification.requestPermission();
+        setLocal((l) => ({ ...l, notifyEnabled: perm === "granted" }));
+        mutate((d) => ({ ...d, settings: { ...d.settings, notifyEnabled: perm === "granted" } }));
+    };
+    const allCycles = getAllCycles({ settings: local });
+    const addCustomCycle = () => {
+        if (!cycleForm.label.trim())
+            return;
+        const newCycle = makeCustomCycle(cycleForm.label.trim(), Number(cycleForm.month));
+        const nextCustom = [...(local.customBaharCycles || []), newCycle];
+        const nextSettings = { ...local, customBaharCycles: nextCustom, baharCycle: newCycle.key };
+        setLocal(nextSettings);
+        mutate((d) => ({ ...d, settings: nextSettings }));
+        setCycleModal(false);
+        setCycleForm({ label: "", month: 6 });
+    };
+    const removeCustomCycle = (key) => {
+        const nextCustom = (local.customBaharCycles || []).filter((c) => c.key !== key);
+        const nextSettings = {
+            ...local,
+            customBaharCycles: nextCustom,
+            baharCycle: local.baharCycle === key ? "hasta" : local.baharCycle,
+        };
+        setLocal(nextSettings);
+        mutate((d) => ({ ...d, settings: nextSettings }));
+    };
+    return (React.createElement("div", { className: "space-y-4" },
+        React.createElement(SectionTitle, { eyebrow: "Farm profile", title: "Settings" }),
+        React.createElement(Card, { className: "p-5 space-y-3" },
+            React.createElement(Field, { label: "Farm name" },
+                React.createElement("input", { className: inputClass, style: inputStyle, value: data.farmName, onChange: (e) => mutate((d) => ({ ...d, farmName: e.target.value })) })),
+            React.createElement(Field, { label: "Bahar cycle this season" },
+                React.createElement("select", { className: inputClass, style: inputStyle, value: local.baharCycle || "hasta", onChange: (e) => setLocal({ ...local, baharCycle: e.target.value }) }, Object.values(allCycles).map((c) => (React.createElement("option", { key: c.key, value: c.key },
+                    c.label,
+                    " \u2014 ",
+                    describeCycle(c.shift)))))),
+            (local.customBaharCycles || []).length > 0 && (React.createElement("div", { className: "space-y-1.5 pl-1" }, local.customBaharCycles.map((c) => (React.createElement("div", { key: c.key, className: "flex items-center justify-between text-xs py-1" },
+                React.createElement("span", { style: { color: COLORS.creamDim } },
+                    c.label,
+                    " \u2014 ",
+                    describeCycle(c.shift)),
+                React.createElement("button", { onClick: () => removeCustomCycle(c.key) },
+                    React.createElement(Icon, { name: "trash", size: 13, color: COLORS.creamDim }))))))),
+            React.createElement(Btn, { variant: "ghost", onClick: () => setCycleModal(true), className: "w-full" },
+                React.createElement(Icon, { name: "plus", size: 15 }),
+                " Add custom bahar cycle"),
+            React.createElement(Field, { label: "Location" },
+                React.createElement("input", { className: inputClass, style: inputStyle, value: local.place, onChange: (e) => setLocal({ ...local, place: e.target.value }) })),
+            React.createElement("div", { className: "grid grid-cols-2 gap-3" },
+                React.createElement(Field, { label: "Latitude" },
+                    React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: local.lat, onChange: (e) => setLocal({ ...local, lat: parseFloat(e.target.value) }) })),
+                React.createElement(Field, { label: "Longitude" },
+                    React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: local.lon, onChange: (e) => setLocal({ ...local, lon: parseFloat(e.target.value) }) }))),
+            React.createElement(Field, { label: "Remind me this many days before a planned task" },
+                React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: local.notifyDaysBefore, onChange: (e) => setLocal({ ...local, notifyDaysBefore: parseInt(e.target.value) || 0 }) })),
+            React.createElement(Btn, { onClick: save }, "Save settings")),
+        React.createElement(Modal, { open: cycleModal, onClose: () => setCycleModal(false), title: "Add a custom bahar cycle" },
+            React.createElement("div", { className: "space-y-3" },
+                React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } }, "Doesn't fit Hasta, Mrig, or Ambe? Tell us which month you did the Ethrel / induction spray, and the whole cycle \u2014 flowering, fruit set, development, harvest \u2014 gets generated around it."),
+                React.createElement(Field, { label: "Name this cycle" },
+                    React.createElement("input", { className: inputClass, style: inputStyle, value: cycleForm.label, onChange: (e) => setCycleForm({ ...cycleForm, label: e.target.value }), placeholder: "e.g. July Bahar" })),
+                React.createElement(Field, { label: "Month of induction (Ethrel) spray" },
+                    React.createElement("select", { className: inputClass, style: inputStyle, value: cycleForm.month, onChange: (e) => setCycleForm({ ...cycleForm, month: e.target.value }) }, MONTH_NAMES.map((m, idx) => React.createElement("option", { key: m, value: idx }, m)))),
+                React.createElement("div", { className: "text-xs p-2 rounded-lg", style: { background: "#1B1C17", color: COLORS.creamDim } },
+                    "Preview: ",
+                    describeCycle(Number(cycleForm.month) - BASE_INDUCTION_MONTH)),
+                React.createElement(Btn, { onClick: addCustomCycle, className: "w-full", disabled: !cycleForm.label.trim() }, "Create cycle"))),
+        React.createElement(Card, { className: "p-5" },
+            React.createElement("div", { className: "text-sm mb-2", style: { color: COLORS.cream } }, "Browser notifications"),
+            React.createElement("div", { className: "text-xs mb-3", style: { color: COLORS.creamDim } }, "Turn these on to get a device notification for upcoming sprays and tasks while this app is open in your browser."),
+            React.createElement(Btn, { variant: "gold", onClick: requestNotif },
+                React.createElement(Icon, { name: "bell", size: 16 }),
+                " ",
+                local.notifyEnabled ? "Notifications enabled" : "Enable notifications")),
+        React.createElement(Card, { className: "p-5" },
+            React.createElement("div", { className: "text-sm mb-2", style: { color: COLORS.cream } }, "Backup"),
+            React.createElement("div", { className: "text-xs mb-3", style: { color: COLORS.creamDim } }, "All your data is saved automatically as you go. You can also download a full backup file, or restore from one."),
+            React.createElement("div", { className: "flex gap-3 flex-wrap" },
+                React.createElement(Btn, { variant: "ghost", onClick: onExport },
+                    React.createElement(Icon, { name: "download", size: 16 }),
+                    " Download backup"),
+                React.createElement(Btn, { variant: "ghost", onClick: () => fileRef.current.click() },
+                    React.createElement(Icon, { name: "upload", size: 16 }),
+                    " Restore backup"),
+                React.createElement("input", { ref: fileRef, type: "file", accept: "application/json", className: "hidden", onChange: onImport }))),
+        React.createElement(Card, { className: "p-5" },
+            React.createElement("div", { className: "text-sm mb-2", style: { color: COLORS.cream } }, "Records \u2014 Excel & PDF"),
+            React.createElement("div", { className: "text-xs mb-3", style: { color: COLORS.creamDim } }, "Every task, spray/fertigation, inventory item, field visit, weather reading, and yield record \u2014 as one spreadsheet with a sheet per category, or a printable report you can save as a PDF from your browser's print dialog."),
+            React.createElement("div", { className: "flex gap-3 flex-wrap" },
+                React.createElement(Btn, { variant: "gold", onClick: onExportExcel },
+                    React.createElement(Icon, { name: "filesheet", size: 16 }),
+                    " Export to Excel"),
+                React.createElement(Btn, { variant: "ghost", onClick: onPrintReport },
+                    React.createElement(Icon, { name: "printer", size: 16 }),
+                    " Print / Save as PDF")))));
+}
+// ---------- App ----------
+const TABS = [
+    { key: "dashboard", label: "Home", icon: "sprout" },
+    { key: "calendar", label: "Calendar", icon: "calendar" },
+    { key: "visits", label: "Field Visits", icon: "visits" },
+    { key: "inventory", label: "Inventory", icon: "inventory" },
+    { key: "spray", label: "Spray", icon: "spray" },
+    { key: "weather", label: "Weather", icon: "weather" },
+    { key: "analytics", label: "Analytics", icon: "analytics" },
+    { key: "settings", label: "Settings", icon: "settings" },
+];
+function App() {
+    var _a, _b;
+    const [data, setData] = useState(null);
+    const [activeTab, setActiveTab] = useState("dashboard");
+    const [ready, setReady] = useState(false);
+    useEffect(() => {
+        loadData().then((d) => {
+            setData(d);
+            setReady(true);
+        });
+    }, []);
+    const mutate = useCallback((fn) => {
+        setData((prev) => {
+            const next = fn(prev);
+            saveData(next);
+            return next;
+        });
+    }, []);
+    const notifications = useMemo(() => {
+        var _a;
+        if (!data)
+            return [];
+        const notifyBy = (_a = data.settings.notifyDaysBefore) !== null && _a !== void 0 ? _a : 3;
+        const overdueMsgs = [];
+        const upcomingMsgs = [];
+        const all = [
+            ...data.events.filter((e) => !e.done).map((e) => ({ date: e.date, title: e.title })),
+            ...data.sprays.filter((s) => s.status === "planned").map((s) => ({ date: s.date, title: `${s.type === "spray" ? "Spray" : "Fertigation"}: ${s.productName}` })),
+        ];
+        all.forEach((item) => {
+            const diff = daysBetween(todayStr(), item.date);
+            if (diff < 0) {
+                const daysLate = -diff;
+                overdueMsgs.push(`Overdue by ${daysLate} day${daysLate > 1 ? "s" : ""}: ${item.title}`);
+            }
+            else if (diff <= notifyBy) {
+                upcomingMsgs.push(diff === 0 ? `Today: ${item.title}` : `In ${diff} day${diff > 1 ? "s" : ""}: ${item.title}`);
+            }
+        });
+        return [...overdueMsgs, ...upcomingMsgs].slice(0, 5);
+    }, [data]);
+    // fire browser notifications once per load if enabled
+    const firedRef = useRef(false);
+    useEffect(() => {
+        if (!data || firedRef.current)
+            return;
+        if (data.settings.notifyEnabled && "Notification" in window && Notification.permission === "granted" && notifications.length) {
+            notifications.forEach((n) => new Notification("Orchard reminder", { body: n }));
+            firedRef.current = true;
+        }
+    }, [data, notifications]);
+    const handleExport = () => {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `farm-backup-${todayStr()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+    const handleImport = (e) => {
+        const file = e.target.files[0];
+        if (!file)
+            return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            try {
+                const imported = JSON.parse(reader.result);
+                setData(imported);
+                saveData(imported);
+            }
+            catch (err) {
+                alert("That file couldn't be read as a backup.");
+            }
+        };
+        reader.readAsText(file);
+    };
+    const handleExportExcel = async () => {
+        if (typeof XLSX === "undefined") {
+            try {
+                await loadScriptOnce("https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js");
+            } catch (e) {
+                alert("Couldn't load the Excel export library — check your internet connection and try again.");
+                return;
+            }
+        }
+        const cycleShift = resolveCycle(data).shift;
+        const stageLabel = (key) => { var _a; return ((_a = getStages(cycleShift).find((s) => s.key === key)) === null || _a === void 0 ? void 0 : _a.label) || key; };
+        const wb = XLSX.utils.book_new();
+        const sheetDefs = [
+            ["Events", data.events.map((e) => ({ Date: e.date, Title: e.title, Type: eventTypeLabel(e.type), Status: e.done ? "Done" : "Pending" }))],
+            ["Spray-Fertigation", data.sprays.map((s) => ({ Date: s.date, Type: s.type === "spray" ? "Foliar Spray" : "Fertigation", Product: s.productName, Quantity: s.quantity, Unit: s.unit, Stage: stageLabel(s.stage), Status: s.status, "Cost (INR)": s.cost || 0, Notes: s.notes || "" }))],
+            ["Inventory", data.inventory.map((i) => ({ Name: i.name, Category: i.category, "Qty on hand": i.qty, Unit: i.unit, "Reorder below": i.reorderLevel, "Cost per unit (INR)": i.costPerUnit }))],
+            ["Field Visits", data.fieldVisits.map((v) => ({ Date: v.date, Category: v.tag, Plot: v.plot || "", Notes: v.notes }))],
+            ["Weather Log", data.weatherLogs.map((w) => ({ Date: w.date, "Max Temp C": w.tempMax, "Min Temp C": w.tempMin, "Rainfall mm": w.rainfall, "Humidity %": w.humidity, Source: w.source }))],
+            ["Yield Records", data.yieldRecords.map((y) => ({ Season: y.season, Year: y.year, "Yield (kg)": y.yieldKg, "Price/kg (INR)": y.pricePerKg, "Revenue (INR)": y.yieldKg * y.pricePerKg }))],
+        ];
+        sheetDefs.forEach(([name, rows]) => {
+            const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Note: "No records yet" }]);
+            XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+        });
+        XLSX.writeFile(wb, `farm-records-${todayStr()}.xlsx`);
+    };
+    const handlePrintReport = () => {
+        const w = window.open("", "_blank");
+        if (!w)
+            return;
+        const cycleShift = resolveCycle(data).shift;
+        const stageLabel = (key) => { var _a; return ((_a = getStages(cycleShift).find((s) => s.key === key)) === null || _a === void 0 ? void 0 : _a.label) || key; };
+        const table = (title, rows, cols) => {
+            if (!rows.length)
+                return `<h3>${title}</h3><p class="muted">No records yet.</p>`;
+            return `<h3>${title}</h3><table><thead><tr>${cols.map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>${rows
+                .map((r) => `<tr>${cols.map((c) => { var _a; return `<td>${(_a = r[c]) !== null && _a !== void 0 ? _a : ""}</td>`; }).join("")}</tr>`)
+                .join("")}</tbody></table>`;
+        };
+        const html = `<!DOCTYPE html><html><head><title>${data.farmName} — Farm Records</title><style>
+      body{font-family:Arial,sans-serif;color:#222;padding:24px;}
+      h1{margin-bottom:0;} .muted{color:#0009;font-size:12px;margin-bottom:16px;}
+      h3{margin-top:28px;border-bottom:2px solid #B12A42;padding-bottom:4px;}
+      table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px;}
+      th,td{border:1px solid #ccc;padding:4px 6px;text-align:left;}
+      th{background:#f0eee7;}
+      p.muted{font-size:12px;}
+      @media print { h3 { page-break-after: avoid; } tr { page-break-inside: avoid; } }
+    </style></head><body>
+      <h1>${data.farmName}</h1>
+      <div class="muted">${data.settings.place} · Printed ${fmtDate(todayStr())}</div>
+      ${table("Calendar Tasks", data.events.map((e) => ({ Date: fmtDate(e.date), Title: e.title, Type: eventTypeLabel(e.type), Status: e.done ? "Done" : "Pending" })), ["Date", "Title", "Type", "Status"])}
+      ${table("Spray & Fertigation", data.sprays.map((s) => ({ Date: fmtDate(s.date), Product: s.productName, Qty: `${s.quantity}${s.unit}`, Stage: stageLabel(s.stage), Status: s.status, Cost: inr(s.cost || 0) })), ["Date", "Product", "Qty", "Stage", "Status", "Cost"])}
+      ${table("Inventory", data.inventory.map((i) => ({ Name: i.name, Category: i.category, "On hand": `${i.qty}${i.unit}`, "Reorder below": `${i.reorderLevel}${i.unit}` })), ["Name", "Category", "On hand", "Reorder below"])}
+      ${table("Field Visits", data.fieldVisits.map((v) => ({ Date: fmtDate(v.date), Category: v.tag, Plot: v.plot || "—", Notes: v.notes })), ["Date", "Category", "Plot", "Notes"])}
+      ${table("Yield Records", data.yieldRecords.map((y) => ({ Season: `${y.season} ${y.year}`, "Yield (kg)": y.yieldKg, "Price/kg": inr(y.pricePerKg), Revenue: inr(y.yieldKg * y.pricePerKg) })), ["Season", "Yield (kg)", "Price/kg", "Revenue"])}
+    </body></html>`;
+        w.document.write(html);
+        w.document.close();
+        w.focus();
+        setTimeout(() => w.print(), 300);
+    };
+    if (!ready || !data) {
+        return (React.createElement("div", { className: "min-h-screen flex items-center justify-center", style: { background: COLORS.bg } },
+            React.createElement("div", { className: "flex items-center gap-3", style: { color: COLORS.cream } },
+                React.createElement(Icon, { name: "sprout", className: "animate-pulse" }),
+                React.createElement("span", { style: { fontFamily: "'Fraunces', serif" } }, "Loading orchard\u2026"))));
+    }
+    const ActiveIcon = (_a = TABS.find((t) => t.key === activeTab)) === null || _a === void 0 ? void 0 : _a.icon;
+    return (React.createElement("div", { className: "min-h-screen pb-20 sm:pb-0 sm:pl-56", style: { background: COLORS.bg } },
+        React.createElement("style", null, `
+        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+        * { font-family: 'Inter', sans-serif; }
+        ::selection { background: ${COLORS.ruby}; color: ${COLORS.cream}; }
+        input:focus, select:focus { border-color: ${COLORS.gold} !important; }
+      `),
+        React.createElement("aside", { className: "hidden sm:flex flex-col fixed left-0 top-0 bottom-0 w-56 p-5", style: { background: COLORS.bgPanel, borderRight: "1px solid #3A3C31" } },
+            React.createElement("div", { className: "flex items-center gap-2 mb-8" },
+                React.createElement(Icon, { name: "sprout", size: 22, color: COLORS.ruby }),
+                React.createElement("span", { style: { fontFamily: "'Fraunces', serif", color: COLORS.cream, fontSize: "1.1rem" } }, "Orchard")),
+            React.createElement("nav", { className: "space-y-1" }, TABS.map((t) => (React.createElement("button", { key: t.key, onClick: () => setActiveTab(t.key), className: "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-colors", style: {
+                    background: activeTab === t.key ? "rgba(177,42,66,0.18)" : "transparent",
+                    color: activeTab === t.key ? COLORS.cream : COLORS.creamDim,
+                } },
+                React.createElement(Icon, { name: t.icon, size: 17 }),
+                t.label))))),
+        React.createElement("div", { className: "sm:hidden flex items-center gap-2 px-4 py-4", style: { borderBottom: "1px solid #3A3C31" } },
+            ActiveIcon && React.createElement(Icon, { name: ActiveIcon, size: 18, color: COLORS.ruby }),
+            React.createElement("span", { style: { fontFamily: "'Fraunces', serif", color: COLORS.cream, fontSize: "1.1rem" } }, (_b = TABS.find((t) => t.key === activeTab)) === null || _b === void 0 ? void 0 : _b.label)),
+        React.createElement("main", { className: "p-4 sm:p-8 max-w-4xl mx-auto" },
+            activeTab === "dashboard" && React.createElement(Dashboard, { data: data, setActiveTab: setActiveTab, notifications: notifications }),
+            activeTab === "calendar" && React.createElement(CalendarView, { data: data, mutate: mutate }),
+            activeTab === "visits" && React.createElement(FieldVisitsView, { data: data, mutate: mutate }),
+            activeTab === "inventory" && React.createElement(InventoryView, { data: data, mutate: mutate }),
+            activeTab === "spray" && React.createElement(SprayPlanner, { data: data, mutate: mutate }),
+            activeTab === "weather" && React.createElement(WeatherView, { data: data, mutate: mutate }),
+            activeTab === "analytics" && React.createElement(AnalyticsView, { data: data, mutate: mutate }),
+            activeTab === "settings" && React.createElement(SettingsView, { data: data, mutate: mutate, onExport: handleExport, onImport: handleImport, onExportExcel: handleExportExcel, onPrintReport: handlePrintReport })),
+        React.createElement("nav", { className: "sm:hidden fixed bottom-0 left-0 right-0 flex overflow-x-auto py-2 px-1 gap-0.5", style: { background: COLORS.bgPanel, borderTop: "1px solid #3A3C31" } }, TABS.map((t) => (React.createElement("button", { key: t.key, onClick: () => setActiveTab(t.key), className: "flex flex-col items-center gap-0.5 px-2.5 py-1 shrink-0", style: { color: activeTab === t.key ? COLORS.ruby : COLORS.creamDim } },
+            React.createElement(Icon, { name: t.icon, size: 19 }),
+            React.createElement("span", { className: "text-[9px] whitespace-nowrap" }, t.label)))))));
+}
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(App, null));
+bootDone = true; // tell the plain boot-diagnostic script that React took over successfully
+
+</script>
+</body>
+</html>
