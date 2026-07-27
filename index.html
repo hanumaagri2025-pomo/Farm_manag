@@ -233,9 +233,9 @@ function resolveCycle(data) {
 const DEFAULT_DATA = {
     farmName: "Super Bhagwa Orchard",
     settings: {
-        lat: 14.12,
-        lon: 77.27,
-        place: "Madakasira, Anantapur Dist., Andhra Pradesh",
+        lat: 13.976,
+        lon: 77.105,
+        place: "Gudibanda, Anantapur Dist. (nearest station to S.Rayapuram)",
         notifyDaysBefore: 3,
         notifyEnabled: false,
         baharCycle: "hasta",
@@ -262,6 +262,9 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
 const fmtDate = (d) => new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
 const inr = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+// A spray/fertigation plan can now hold several tank-mixed products — this gives
+// one consistent "Product A (2L), Product B (500g)" label wherever a plan is shown.
+const sprayPlanLabel = (s) => (s.items || []).map((it) => `${it.productName} (${it.quantity}${it.unit})`).join(", ") || s.productName || "Plan";
 // Load an external script only when actually needed (e.g. the Excel export
 // library), instead of blocking page startup on it.
 function loadScriptOnce(src) {
@@ -436,6 +439,31 @@ function SimplePieChart({ data, colors, height = 200 }) {
                 ": ",
                 inr(s.value))))))));
 }
+// ---------- error boundary ----------
+// Wraps each tab individually: if one section throws (bad data, edge case we
+// missed), that section shows a clear "something went wrong" message with the
+// actual error and a reset button — instead of the whole app going blank white.
+class SectionErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { error: null };
+    }
+    static getDerivedStateFromError(error) {
+        return { error };
+    }
+    componentDidCatch(error, info) {
+        console.error("Section crashed:", error, info);
+    }
+    render() {
+        if (this.state.error) {
+            return (React.createElement("div", { className: "p-6 text-center" },
+                React.createElement("div", { style: { color: COLORS.gold, fontFamily: "'Fraunces', serif", fontSize: "1.1rem" } }, "This section hit a problem"),
+                React.createElement("div", { className: "text-xs mt-2 mb-4", style: { color: COLORS.creamDim, fontFamily: "'JetBrains Mono', monospace" } }, String((this.state.error && this.state.error.message) || this.state.error)),
+                React.createElement("button", { onClick: () => this.setState({ error: null }), className: "px-4 py-2 rounded-xl text-sm", style: { background: COLORS.ruby, color: COLORS.cream } }, "Try again")));
+        }
+        return this.props.children;
+    }
+}
 // ---------- small UI atoms ----------
 function Card({ children, className = "" }) {
     return (React.createElement("div", { className: `rounded-2xl border ${className}`, style: { background: COLORS.bgPanel, borderColor: "#3A3C31" } }, children));
@@ -524,13 +552,64 @@ function Dashboard({ data, setActiveTab, notifications }) {
     const upcoming = useMemo(() => {
         const list = [
             ...data.events.filter((e) => !e.done).map((e) => ({ ...e, kind: "event", overdue: e.date < todayStr() })),
-            ...data.sprays.filter((s) => s.status === "planned").map((s) => ({ ...s, kind: "spray", title: `${s.type === "spray" ? "Spray" : "Fertigation"}: ${s.productName}`, overdue: s.date < todayStr() })),
+            ...data.sprays.filter((s) => s.status === "planned").map((s) => ({ ...s, kind: "spray", title: `${s.type === "spray" ? "Spray" : "Fertigation"}: ${sprayPlanLabel(s)}`, overdue: s.date < todayStr() })),
         ];
         return list.sort((a, b) => a.date.localeCompare(b.date)).slice(0, 6);
     }, [data]);
     const lowStock = data.inventory.filter((i) => i.qty <= i.reorderLevel);
+    const inventoryValue = data.inventory.reduce((sum, i) => sum + i.costPerUnit * i.qty, 0);
     const totalSpend = data.sprays.filter((s) => s.status === "done").reduce((sum, s) => sum + (s.cost || 0), 0) +
-        data.expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+        (data.expenses || []).reduce((sum, e) => sum + (e.amount || 0), 0);
+    // A chronological look-back across every module — what's actually happened,
+    // not just what's scheduled. This is the "activity log" farm-record tools
+    // are usually built around.
+    const recentActivity = useMemo(() => {
+        const items = [
+            ...data.events.filter((e) => e.done).map((e) => ({ date: e.date, title: e.title, meta: eventTypeLabel(e.type), kind: "task" })),
+            ...data.sprays.filter((s) => s.status === "done").map((s) => ({ date: s.date, title: sprayPlanLabel(s), meta: s.type === "spray" ? "Spray" : "Fertigation", kind: "spray", amount: s.cost })),
+            ...(data.fieldVisits || []).map((v) => ({ date: v.date, title: v.notes.length > 60 ? v.notes.slice(0, 57) + "…" : v.notes, meta: v.tag, kind: "visit" })),
+            ...(data.expenses || []).filter((e) => e.source !== "task").map((e) => ({ date: e.date, title: e.description, meta: e.category, kind: "expense", amount: e.amount })),
+        ];
+        return items.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
+    }, [data]);
+    const activityIcon = { task: "calendar", spray: "spray", visit: "visits", expense: "analytics" };
+    // Lightweight, rule-based patterns from your own history — not a trained
+    // model, just arithmetic over what you've logged so far.
+    const insights = useMemo(() => {
+        const list = [];
+        const doneSprays = [...data.sprays].filter((s) => s.status === "done").sort((a, b) => a.date.localeCompare(b.date));
+        if (doneSprays.length > 0) {
+            const daysSince = daysBetween(doneSprays[doneSprays.length - 1].date, todayStr());
+            list.push(`${daysSince} day${daysSince === 1 ? "" : "s"} since your last completed spray/fertigation.`);
+        }
+        if (doneSprays.length >= 3) {
+            const gaps = [];
+            for (let i = 1; i < doneSprays.length; i++)
+                gaps.push(daysBetween(doneSprays[i - 1].date, doneSprays[i].date));
+            const avgGap = Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length);
+            list.push(`You typically spray/fertigate every ~${avgGap} days.`);
+        }
+        const visits = [...(data.fieldVisits || [])].sort((a, b) => a.date.localeCompare(b.date));
+        if (visits.length > 0) {
+            const daysSince = daysBetween(visits[visits.length - 1].date, todayStr());
+            if (daysSince >= 7)
+                list.push(`${daysSince} days since your last logged field visit — worth a walk-through.`);
+        }
+        const thisMonth = todayStr().slice(0, 7);
+        const lastMonthDate = new Date();
+        lastMonthDate.setMonth(lastMonthDate.getMonth() - 1);
+        const lastMonth = lastMonthDate.toISOString().slice(0, 7);
+        const spendIn = (month) => data.sprays.filter((s) => s.status === "done" && s.date.slice(0, 7) === month).reduce((a, s) => a + (s.cost || 0), 0) +
+            (data.expenses || []).filter((e) => e.date.slice(0, 7) === month).reduce((a, e) => a + (e.amount || 0), 0);
+        const spendThis = spendIn(thisMonth);
+        const spendLast = spendIn(lastMonth);
+        if (spendLast > 0) {
+            const pct = Math.round(((spendThis - spendLast) / spendLast) * 100);
+            if (Math.abs(pct) >= 10)
+                list.push(`Spend is ${pct > 0 ? "up" : "down"} ${Math.abs(pct)}% this month vs last month.`);
+        }
+        return list.slice(0, 4);
+    }, [data]);
     return (React.createElement("div", { className: "space-y-6" },
         React.createElement(SectionTitle, { eyebrow: data.settings.place, title: data.farmName }),
         notifications.length > 0 && (React.createElement(Card, { className: "p-4 flex items-start gap-3", style: { borderColor: COLORS.gold } },
@@ -552,13 +631,16 @@ function Dashboard({ data, setActiveTab, notifications }) {
                             background: u.overdue ? "rgba(198,81,47,0.18)" : u.kind === "spray" ? "rgba(108,138,90,0.2)" : "rgba(201,154,62,0.2)",
                             color: u.overdue ? COLORS.danger : u.kind === "spray" ? COLORS.leaf : COLORS.gold,
                         } }, u.overdue ? "Overdue" : u.kind === "spray" ? "Spray plan" : "Event")))))),
-                React.createElement("div", { className: "grid grid-cols-2 gap-3 mt-4 pt-4", style: { borderTop: "1px solid #3A3C31" } },
+                React.createElement("div", { className: "grid grid-cols-3 gap-3 mt-4 pt-4", style: { borderTop: "1px solid #3A3C31" } },
                     React.createElement("div", null,
-                        React.createElement("div", { className: "text-2xl", style: { fontFamily: "'Fraunces', serif", color: COLORS.cream } }, inr(totalSpend)),
-                        React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } }, "Season spend to date")),
+                        React.createElement("div", { className: "text-xl sm:text-2xl", style: { fontFamily: "'Fraunces', serif", color: COLORS.cream } }, inr(totalSpend)),
+                        React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } }, "Season spend")),
                     React.createElement("div", null,
-                        React.createElement("div", { className: "text-2xl", style: { fontFamily: "'Fraunces', serif", color: lowStock.length ? COLORS.danger : COLORS.leaf } }, lowStock.length),
-                        React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } }, "Items low on stock"))))),
+                        React.createElement("div", { className: "text-xl sm:text-2xl", style: { fontFamily: "'Fraunces', serif", color: COLORS.cream } }, inr(inventoryValue)),
+                        React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } }, "Inventory value")),
+                    React.createElement("div", null,
+                        React.createElement("div", { className: "text-xl sm:text-2xl", style: { fontFamily: "'Fraunces', serif", color: lowStock.length ? COLORS.danger : COLORS.leaf } }, lowStock.length),
+                        React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } }, "Low on stock"))))),
         lowStock.length > 0 && (React.createElement(Card, { className: "p-4" },
             React.createElement("div", { className: "flex items-center gap-2 mb-2" },
                 React.createElement(Icon, { name: "alert", size: 16, color: COLORS.danger }),
@@ -569,13 +651,45 @@ function Dashboard({ data, setActiveTab, notifications }) {
                 i.qty,
                 i.unit,
                 " left")))),
-            React.createElement("button", { className: "text-xs mt-3 underline", style: { color: COLORS.gold }, onClick: () => setActiveTab("inventory") }, "Go to inventory \u2192")))));
+            React.createElement("button", { className: "text-xs mt-3 underline", style: { color: COLORS.gold }, onClick: () => setActiveTab("inventory") }, "Go to inventory \u2192"))),
+        insights.length > 0 && (React.createElement(Card, { className: "p-4" },
+            React.createElement("div", { className: "text-xs mb-3 tracking-widest uppercase flex items-center gap-2", style: { color: COLORS.creamDim, fontFamily: "'JetBrains Mono', monospace" } },
+                React.createElement(Icon, { name: "analytics", size: 13, color: COLORS.gold }),
+                " Patterns from your records"),
+            React.createElement("div", { className: "space-y-2" }, insights.map((msg, i) => (React.createElement("div", { key: i, className: "text-sm flex items-start gap-2", style: { color: COLORS.cream } },
+                React.createElement("span", { style: { color: COLORS.gold } }, "\u2022"),
+                " ",
+                msg)))))),
+        React.createElement("div", { className: "grid sm:grid-cols-2 gap-4" },
+            React.createElement(Card, { className: "p-5" },
+                React.createElement("div", { className: "text-xs mb-3 tracking-widest uppercase", style: { color: COLORS.creamDim, fontFamily: "'JetBrains Mono', monospace" } }, "Recent activity"),
+                recentActivity.length === 0 ? (React.createElement("div", { className: "text-sm py-4 text-center", style: { color: COLORS.creamDim } }, "Nothing logged yet.")) : (React.createElement("div", { className: "space-y-2" }, recentActivity.map((a, i) => (React.createElement("div", { key: i, className: "flex items-start justify-between gap-2 py-1.5 border-b last:border-0", style: { borderColor: "#3A3C31" } },
+                    React.createElement("div", { className: "flex items-start gap-2 min-w-0" },
+                        React.createElement("span", { className: "mt-0.5 shrink-0" },
+                            React.createElement(Icon, { name: activityIcon[a.kind] || "calendar", size: 13, color: COLORS.creamDim })),
+                        React.createElement("div", { className: "min-w-0" },
+                            React.createElement("div", { className: "text-sm truncate", style: { color: COLORS.cream } }, a.title),
+                            React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } },
+                                fmtDate(a.date),
+                                " \u00B7 ",
+                                a.meta))),
+                    typeof a.amount === "number" && a.amount > 0 && (React.createElement("span", { className: "text-xs shrink-0", style: { color: COLORS.gold } }, inr(a.amount))))))))),
+            React.createElement(Card, { className: "p-5" },
+                React.createElement("div", { className: "text-xs mb-3 tracking-widest uppercase", style: { color: COLORS.creamDim, fontFamily: "'JetBrains Mono', monospace" } }, "Quick actions"),
+                React.createElement("div", { className: "grid grid-cols-2 gap-2" }, [
+                    ["calendar", "Log a task", "calendar"],
+                    ["spray", "Plan a spray", "spray"],
+                    ["visits", "Log a field visit", "visits"],
+                    ["analytics", "Record an expense", "analytics"],
+                ].map(([icon, label, tab]) => (React.createElement("button", { key: tab, onClick: () => setActiveTab(tab), className: "flex items-center gap-2 p-3 rounded-xl text-sm text-left", style: { background: "#1B1C17", color: COLORS.cream, border: "1px solid #3A3C31" } },
+                    React.createElement(Icon, { name: icon, size: 16, color: COLORS.gold }),
+                    label))))))));
 }
 // ---------- Calendar ----------
 function CalendarView({ data, mutate }) {
     const [cursor, setCursor] = useState(new Date());
     const [modal, setModal] = useState(null); // {date} or null
-    const [form, setForm] = useState({ title: "", type: "task", notes: "" });
+    const [form, setForm] = useState({ title: "", type: "task", notes: "", cost: "" });
     const year = cursor.getFullYear();
     const month = cursor.getMonth();
     const firstDay = new Date(year, month, 1).getDay();
@@ -588,7 +702,7 @@ function CalendarView({ data, mutate }) {
         });
         data.sprays.forEach((s) => {
             map[s.date] = map[s.date] || [];
-            map[s.date].push({ id: s.id, date: s.date, title: `${s.type === "spray" ? "🌿" : "💧"} ${s.productName}`, isSpray: true, sprayStatus: s.status });
+            map[s.date].push({ id: s.id, date: s.date, title: `${s.type === "spray" ? "🌿" : "💧"} ${sprayPlanLabel(s)}`, isSpray: true, sprayStatus: s.status });
         });
         return map;
     }, [data]);
@@ -597,7 +711,7 @@ function CalendarView({ data, mutate }) {
     const overdue = useMemo(() => data.events.filter((e) => !e.done && e.date < todayStr()).sort((a, b) => a.date.localeCompare(b.date)), [data.events]);
     const todayAndAhead = useMemo(() => [
         ...data.events.filter((e) => !e.done && e.date >= todayStr()).map((e) => ({ ...e })),
-        ...data.sprays.filter((s) => s.status === "planned" && s.date >= todayStr()).map((s) => ({ id: s.id, date: s.date, title: `${s.type === "spray" ? "Spray" : "Fertigation"}: ${s.productName}` })),
+        ...data.sprays.filter((s) => s.status === "planned" && s.date >= todayStr()).map((s) => ({ id: s.id, date: s.date, title: `${s.type === "spray" ? "Spray" : "Fertigation"}: ${sprayPlanLabel(s)}` })),
     ]
         .sort((a, b) => a.date.localeCompare(b.date))
         .slice(0, 6), [data]);
@@ -609,20 +723,65 @@ function CalendarView({ data, mutate }) {
     const openDay = (d) => {
         const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
         setModal(dateStr);
-        setForm({ title: "", type: "task", notes: "" });
+        setForm({ title: "", type: "task", notes: "", cost: "" });
     };
     const addEvent = () => {
         if (!form.title.trim())
             return;
-        const newEvent = { id: uid(), date: modal, title: form.title.trim(), type: form.type, notes: form.notes, done: false };
+        const newEvent = {
+            id: uid(),
+            date: modal,
+            title: form.title.trim(),
+            type: form.type,
+            notes: form.notes,
+            done: false,
+            cost: parseFloat(form.cost) || 0,
+            expenseId: null,
+        };
         mutate((d) => ({ ...d, events: [...d.events, newEvent] }));
         setModal(null);
     };
     const removeEvent = (id) => {
-        mutate((d) => ({ ...d, events: d.events.filter((e) => e.id !== id) }));
+        mutate((d) => {
+            const ev = d.events.find((e) => e.id === id);
+            return {
+                ...d,
+                events: d.events.filter((e) => e.id !== id),
+                // clean up any expense this task had auto-logged, so deleting a task doesn't leave a stray cost behind
+                expenses: ev && ev.expenseId ? d.expenses.filter((x) => x.id !== ev.expenseId) : d.expenses,
+            };
+        });
     };
+    // Labor, pruning, and weeding are field-work tasks with a real cost but no
+    // dedicated planner (unlike spraying/fertigation, which already track cost
+    // precisely through the Spray & Fertigation inventory linkage) — so marking
+    // one of these done automatically logs its cost as an expense, and un-marking
+    // it removes that expense again, keeping Analytics in sync without a second
+    // manual entry.
+    const COST_RELEVANT_TYPES = ["labor", "pruning", "weeding"];
     const toggleDone = (id) => {
-        mutate((d) => ({ ...d, events: d.events.map((e) => (e.id === id ? { ...e, done: !e.done } : e)) }));
+        mutate((d) => {
+            const ev = d.events.find((e) => e.id === id);
+            if (!ev)
+                return d;
+            const nowDone = !ev.done;
+            if (nowDone && COST_RELEVANT_TYPES.includes(ev.type) && ev.cost > 0 && !ev.expenseId) {
+                const expense = { id: uid(), date: ev.date, category: "Labor", description: ev.title, amount: ev.cost, source: "task" };
+                return {
+                    ...d,
+                    events: d.events.map((e) => (e.id === id ? { ...e, done: true, expenseId: expense.id } : e)),
+                    expenses: [...d.expenses, expense],
+                };
+            }
+            if (!nowDone && ev.expenseId) {
+                return {
+                    ...d,
+                    events: d.events.map((e) => (e.id === id ? { ...e, done: false, expenseId: null } : e)),
+                    expenses: d.expenses.filter((x) => x.id !== ev.expenseId),
+                };
+            }
+            return { ...d, events: d.events.map((e) => (e.id === id ? { ...e, done: nowDone } : e)) };
+        });
     };
     return (React.createElement("div", { className: "space-y-4" },
         React.createElement(SectionTitle, { eyebrow: "Field diary", title: "Calendar", right: React.createElement("div", { className: "flex items-center gap-2" },
@@ -689,7 +848,9 @@ function CalendarView({ data, mutate }) {
             React.createElement("div", { className: "space-y-3 mb-4" }, (eventsByDate[modal] || []).map((e) => (React.createElement("div", { key: e.id, className: "flex items-center justify-between text-sm p-2 rounded-lg", style: { background: "#1B1C17" } },
                 React.createElement("div", null,
                     React.createElement("span", { style: { color: statusColor(e), textDecoration: e.done || (e.isSpray && e.sprayStatus === "done") ? "line-through" : "none" } }, e.title),
-                    !e.isSpray && React.createElement("div", { className: "text-[10px]", style: { color: COLORS.creamDim } }, eventTypeLabel(e.type))),
+                    !e.isSpray && (React.createElement("div", { className: "text-[10px]", style: { color: COLORS.creamDim } },
+                        eventTypeLabel(e.type),
+                        e.cost > 0 && ` · ${inr(e.cost)}${e.expenseId ? " (logged)" : ""}`))),
                 !e.isSpray && (React.createElement("div", { className: "flex gap-2" },
                     React.createElement("button", { onClick: () => toggleDone(e.id) },
                         React.createElement(Icon, { name: "check", size: 16, color: COLORS.leaf })),
@@ -700,6 +861,8 @@ function CalendarView({ data, mutate }) {
                     React.createElement("input", { className: inputClass, style: inputStyle, value: form.title, onChange: (e) => setForm({ ...form, title: e.target.value }), placeholder: "e.g. Check drip lines" })),
                 React.createElement(Field, { label: "Type" },
                     React.createElement("select", { className: inputClass, style: inputStyle, value: form.type, onChange: (e) => setForm({ ...form, type: e.target.value }) }, EVENT_TYPES.map((t) => React.createElement("option", { key: t.key, value: t.key }, t.label)))),
+                COST_RELEVANT_TYPES.includes(form.type) && (React.createElement(Field, { label: "Cost (\u20B9, optional \u2014 logged to Analytics once you mark this done)" },
+                    React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: form.cost, onChange: (e) => setForm({ ...form, cost: e.target.value }), placeholder: "e.g. wages for the day" }))),
                 React.createElement(Btn, { onClick: addEvent, className: "w-full" },
                     React.createElement(Icon, { name: "plus", size: 16 }),
                     " Add to ",
@@ -732,10 +895,14 @@ function InventoryView({ data, mutate }) {
         }));
     };
     const removeItem = (id) => mutate((d) => ({ ...d, inventory: d.inventory.filter((i) => i.id !== id) }));
+    const totalValue = data.inventory.reduce((sum, i) => sum + i.costPerUnit * i.qty, 0);
     return (React.createElement("div", { className: "space-y-4" },
         React.createElement(SectionTitle, { eyebrow: "Store room", title: "Inventory", right: React.createElement(Btn, { onClick: () => setModal(true) },
                 React.createElement(Icon, { name: "plus", size: 16 }),
                 " Add item") }),
+        React.createElement(Card, { className: "p-4 flex items-center justify-between" },
+            React.createElement("span", { className: "text-sm", style: { color: COLORS.creamDim } }, "Total inventory value"),
+            React.createElement("span", { className: "text-xl", style: { fontFamily: "'Fraunces', serif", color: COLORS.cream } }, inr(totalValue))),
         React.createElement("div", { className: "grid sm:grid-cols-2 gap-3" }, data.inventory.map((i) => {
             const low = i.qty <= i.reorderLevel;
             return (React.createElement(Card, { key: i.id, className: "p-4" },
@@ -753,10 +920,14 @@ function InventoryView({ data, mutate }) {
                             " ",
                             i.unit),
                         React.createElement("button", { onClick: () => adjustQty(i.id, 1), className: "w-7 h-7 rounded-full flex items-center justify-center", style: { background: "#1B1C17", color: COLORS.cream } }, "+")),
-                    React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } },
-                        inr(i.costPerUnit),
-                        "/",
-                        i.unit)),
+                    React.createElement("div", { className: "text-right" },
+                        React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } },
+                            inr(i.costPerUnit),
+                            "/",
+                            i.unit),
+                        React.createElement("div", { className: "text-xs", style: { color: COLORS.gold } },
+                            inr(i.costPerUnit * i.qty),
+                            " total"))),
                 low && (React.createElement("div", { className: "text-xs mt-2 flex items-center gap-1", style: { color: COLORS.danger } },
                     React.createElement(Icon, { name: "alert", size: 12 }),
                     " Below reorder level (",
@@ -788,19 +959,28 @@ function SprayPlanner({ data, mutate }) {
     const cycleDef = resolveCycle(data);
     const stages = useMemo(() => getStages(cycleDef.shift), [cycleDef.shift]);
     const [modal, setModal] = useState(false);
-    const [form, setForm] = useState({ date: todayStr(), type: "spray", inventoryId: "", quantity: "", stage: stages[0].key, notes: "" });
+    const emptyRow = () => ({ rowId: uid(), inventoryId: "", quantity: "" });
+    const [form, setForm] = useState({ date: todayStr(), type: "spray", stage: stages[0].key, notes: "", items: [emptyRow()] });
+    const updateRow = (rowId, patch) => {
+        setForm((f) => ({ ...f, items: f.items.map((r) => (r.rowId === rowId ? { ...r, ...patch } : r)) }));
+    };
+    const addRow = () => setForm((f) => ({ ...f, items: [...f.items, emptyRow()] }));
+    const removeRow = (rowId) => setForm((f) => ({ ...f, items: f.items.length > 1 ? f.items.filter((r) => r.rowId !== rowId) : f.items }));
     const addPlan = () => {
-        const item = data.inventory.find((i) => i.id === form.inventoryId);
-        if (!item)
+        const items = form.items
+            .filter((r) => r.inventoryId && parseFloat(r.quantity) > 0)
+            .map((r) => {
+            const item = data.inventory.find((i) => i.id === r.inventoryId);
+            return item ? { inventoryId: item.id, productName: item.name, quantity: parseFloat(r.quantity), unit: item.unit } : null;
+        })
+            .filter(Boolean);
+        if (items.length === 0)
             return;
         const plan = {
             id: uid(),
             date: form.date,
             type: form.type,
-            inventoryId: item.id,
-            productName: item.name,
-            quantity: parseFloat(form.quantity) || 0,
-            unit: item.unit,
+            items,
             stage: form.stage,
             status: "planned",
             notes: form.notes,
@@ -808,25 +988,35 @@ function SprayPlanner({ data, mutate }) {
         };
         mutate((d) => ({ ...d, sprays: [...d.sprays, plan] }));
         setModal(false);
-        setForm({ date: todayStr(), type: "spray", inventoryId: "", quantity: "", stage: stages[0].key, notes: "" });
+        setForm({ date: todayStr(), type: "spray", stage: stages[0].key, notes: "", items: [emptyRow()] });
     };
     const markDone = (id) => {
         mutate((d) => {
             const plan = d.sprays.find((s) => s.id === id);
             if (!plan)
                 return d;
-            const item = d.inventory.find((i) => i.id === plan.inventoryId);
-            const cost = item ? item.costPerUnit * plan.quantity : 0;
+            let totalCost = 0;
+            const deductions = {}; // inventoryId -> qty to subtract
+            const pricedItems = plan.items.map((it) => {
+                const invItem = d.inventory.find((i) => i.id === it.inventoryId);
+                const lineCost = invItem ? invItem.costPerUnit * it.quantity : 0;
+                totalCost += lineCost;
+                if (invItem)
+                    deductions[it.inventoryId] = (deductions[it.inventoryId] || 0) + it.quantity;
+                return { ...it, lineCost };
+            });
             return {
                 ...d,
-                sprays: d.sprays.map((s) => (s.id === id ? { ...s, status: "done", cost } : s)),
-                inventory: item ? d.inventory.map((i) => (i.id === item.id ? { ...i, qty: Math.max(0, +(i.qty - plan.quantity).toFixed(2)) } : i)) : d.inventory,
+                sprays: d.sprays.map((s) => (s.id === id ? { ...s, status: "done", cost: totalCost, items: pricedItems } : s)),
+                inventory: d.inventory.map((i) => (deductions[i.id] ? { ...i, qty: Math.max(0, +(i.qty - deductions[i.id]).toFixed(2)) } : i)),
             };
         });
     };
     const markSkipped = (id) => mutate((d) => ({ ...d, sprays: d.sprays.map((s) => (s.id === id ? { ...s, status: "skipped" } : s)) }));
     const removePlan = (id) => mutate((d) => ({ ...d, sprays: d.sprays.filter((s) => s.id !== id) }));
     const sorted = [...data.sprays].sort((a, b) => b.date.localeCompare(a.date));
+    const planLabel = (s) => (s.items || []).map((it) => `${it.productName} (${it.quantity}${it.unit})`).join(", ");
+    const validRowCount = form.items.filter((r) => r.inventoryId && parseFloat(r.quantity) > 0).length;
     return (React.createElement("div", { className: "space-y-4" },
         React.createElement(SectionTitle, { eyebrow: "Stage-linked schedule", title: "Spray & Fertigation", right: React.createElement(Btn, { onClick: () => setModal(true) },
                 React.createElement(Icon, { name: "plus", size: 16 }),
@@ -851,15 +1041,12 @@ function SprayPlanner({ data, mutate }) {
                         React.createElement("div", { className: "w-9 h-9 rounded-full flex items-center justify-center shrink-0", style: { background: s.type === "spray" ? "rgba(108,138,90,0.2)" : "rgba(201,154,62,0.2)" } },
                             React.createElement(Icon, { name: "spray", size: 16, color: s.type === "spray" ? COLORS.leaf : COLORS.gold })),
                         React.createElement("div", null,
-                            React.createElement("div", { className: "text-sm", style: { color: COLORS.cream } },
-                                s.productName,
-                                " \u2014 ",
-                                s.quantity,
-                                s.unit),
+                            React.createElement("div", { className: "text-sm", style: { color: COLORS.cream } }, planLabel(s)),
                             React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } },
                                 fmtDate(s.date),
                                 " \u00B7 ", (_a = stages.find((x) => x.key === s.stage)) === null || _a === void 0 ? void 0 :
-                                _a.label))),
+                                _a.label,
+                                s.status === "done" ? ` · ${inr(s.cost)}` : ""))),
                     React.createElement("div", { className: "flex items-center gap-2" },
                         React.createElement("span", { className: "text-xs px-2 py-1 rounded-full", style: {
                                 background: s.status === "done" ? "rgba(108,138,90,0.2)" : s.status === "skipped" ? "rgba(198,81,47,0.15)" : "rgba(201,154,62,0.15)",
@@ -882,23 +1069,29 @@ function SprayPlanner({ data, mutate }) {
                         React.createElement("select", { className: inputClass, style: inputStyle, value: form.type, onChange: (e) => setForm({ ...form, type: e.target.value }) },
                             React.createElement("option", { value: "spray" }, "Foliar Spray"),
                             React.createElement("option", { value: "fertigation" }, "Fertigation")))),
-                React.createElement(Field, { label: "Product (from inventory)" },
-                    React.createElement("select", { className: inputClass, style: inputStyle, value: form.inventoryId, onChange: (e) => setForm({ ...form, inventoryId: e.target.value }) },
-                        React.createElement("option", { value: "" }, "Select\u2026"),
-                        data.inventory.map((i) => React.createElement("option", { key: i.id, value: i.id },
-                            i.name,
-                            " (",
-                            i.qty,
-                            i.unit,
-                            " in stock)")))),
-                React.createElement("div", { className: "grid grid-cols-2 gap-3" },
-                    React.createElement(Field, { label: "Quantity to use" },
-                        React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: form.quantity, onChange: (e) => setForm({ ...form, quantity: e.target.value }) })),
-                    React.createElement(Field, { label: "Crop stage" },
-                        React.createElement("select", { className: inputClass, style: inputStyle, value: form.stage, onChange: (e) => setForm({ ...form, stage: e.target.value }) }, stages.map((s) => React.createElement("option", { key: s.key, value: s.key }, s.label))))),
+                React.createElement("span", { className: "block text-xs", style: { color: COLORS.creamDim } }, "Products (tank mix \u2014 add as many as you're combining)"),
+                React.createElement("div", { className: "space-y-2" }, form.items.map((row, idx) => (React.createElement("div", { key: row.rowId, className: "flex gap-2 items-end" },
+                    React.createElement("div", { className: "flex-1" },
+                        React.createElement("select", { className: inputClass, style: inputStyle, value: row.inventoryId, onChange: (e) => updateRow(row.rowId, { inventoryId: e.target.value }) },
+                            React.createElement("option", { value: "" }, "Select product\u2026"),
+                            data.inventory.map((i) => React.createElement("option", { key: i.id, value: i.id },
+                                i.name,
+                                " (",
+                                i.qty,
+                                i.unit,
+                                " in stock)")))),
+                    React.createElement("div", { className: "w-24" },
+                        React.createElement("input", { type: "number", className: inputClass, style: inputStyle, placeholder: "Qty", value: row.quantity, onChange: (e) => updateRow(row.rowId, { quantity: e.target.value }) })),
+                    React.createElement("button", { onClick: () => removeRow(row.rowId), disabled: form.items.length === 1, className: "pb-2 disabled:opacity-30" },
+                        React.createElement(Icon, { name: "trash", size: 16, color: COLORS.creamDim })))))),
+                React.createElement(Btn, { variant: "ghost", onClick: addRow, className: "w-full" },
+                    React.createElement(Icon, { name: "plus", size: 14 }),
+                    " Add another product"),
+                React.createElement(Field, { label: "Crop stage" },
+                    React.createElement("select", { className: inputClass, style: inputStyle, value: form.stage, onChange: (e) => setForm({ ...form, stage: e.target.value }) }, stages.map((s) => React.createElement("option", { key: s.key, value: s.key }, s.label)))),
                 React.createElement(Field, { label: "Notes" },
                     React.createElement("input", { className: inputClass, style: inputStyle, value: form.notes, onChange: (e) => setForm({ ...form, notes: e.target.value }), placeholder: "Dose rate, tank mix, etc." })),
-                React.createElement(Btn, { onClick: addPlan, className: "w-full", disabled: !form.inventoryId }, "Save plan")))));
+                React.createElement(Btn, { onClick: addPlan, className: "w-full", disabled: validRowCount === 0 }, "Save plan")))));
 }
 // ---------- Weather ----------
 function WeatherView({ data, mutate }) {
@@ -993,13 +1186,22 @@ function AnalyticsView({ data, mutate }) {
     // (cost recorded automatically when marked done) plus manually logged expenses
     // (inventory pick, labor, fuel, repairs, etc.)
     const allCosts = useMemo(() => {
-        const fromSprays = data.sprays
-            .filter((s) => s.status === "done")
-            .map((s) => {
-            const item = data.inventory.find((i) => i.id === s.inventoryId);
-            return { date: s.date, category: item ? item.category : "Other", amount: s.cost || 0 };
+        const fromSprays = [];
+        data.sprays.filter((s) => s.status === "done").forEach((s) => {
+            if (Array.isArray(s.items) && s.items.length > 0) {
+                s.items.forEach((it) => {
+                    const item = data.inventory.find((i) => i.id === it.inventoryId);
+                    const amount = typeof it.lineCost === "number" ? it.lineCost : 0;
+                    fromSprays.push({ date: s.date, category: item ? item.category : "Other", amount });
+                });
+            }
+            else {
+                // fallback for plans saved before multi-product support existed
+                const item = data.inventory.find((i) => i.id === s.inventoryId);
+                fromSprays.push({ date: s.date, category: item ? item.category : "Other", amount: s.cost || 0 });
+            }
         });
-        const fromExpenses = data.expenses.map((e) => ({ date: e.date, category: e.category, amount: e.amount || 0 }));
+        const fromExpenses = (data.expenses || []).map((e) => ({ date: e.date, category: e.category, amount: e.amount || 0 }));
         return [...fromSprays, ...fromExpenses];
     }, [data]);
     const spendByCategory = useMemo(() => {
@@ -1018,6 +1220,7 @@ function AnalyticsView({ data, mutate }) {
         return total ? Math.round((done / total) * 100) : 0;
     }, [data]);
     const totalSpend = allCosts.reduce((a, c) => a + c.amount, 0);
+    const inventoryValue = data.inventory.reduce((sum, i) => sum + i.costPerUnit * i.qty, 0);
     const totalRevenue = data.yieldRecords.reduce((a, y) => a + y.yieldKg * y.pricePerKg, 0);
     const addYield = () => {
         if (!form.yieldKg)
@@ -1056,13 +1259,14 @@ function AnalyticsView({ data, mutate }) {
         setExpForm({ date: todayStr(), inventoryId: "", quantity: "", deductStock: true, category: "Labor", description: "", amount: "", workers: "", days: "", rate: "" });
     };
     const removeExpense = (id) => mutate((d) => ({ ...d, expenses: d.expenses.filter((e) => e.id !== id) }));
-    const recentExpenses = [...data.expenses].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
+    const recentExpenses = [...(data.expenses || [])].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
     return (React.createElement("div", { className: "space-y-4" },
         React.createElement(SectionTitle, { eyebrow: "Season performance", title: "Analytics" }),
-        React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-4 gap-3" }, [
+        React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-5 gap-3" }, [
             ["Total spend", inr(totalSpend)],
             ["Total revenue", inr(totalRevenue)],
             ["Net", inr(totalRevenue - totalSpend)],
+            ["Inventory value", inr(inventoryValue)],
             ["Plan completion", completion + "%"],
         ].map(([label, val]) => (React.createElement(Card, { key: label, className: "p-4" },
             React.createElement("div", { className: "text-lg sm:text-xl", style: { fontFamily: "'Fraunces', serif", color: COLORS.cream } }, val),
@@ -1139,7 +1343,7 @@ function AnalyticsView({ data, mutate }) {
                 React.createElement("div", { className: "flex items-center gap-2 shrink-0 ml-2" },
                     React.createElement("span", { style: { color: COLORS.cream } }, inr(e.amount)),
                     React.createElement("button", { onClick: () => removeExpense(e.id) },
-                        React.createElement(Trash2, { size: 12, color: COLORS.creamDim }))))))))),
+                        React.createElement(Icon, { name: "trash", size: 12, color: COLORS.creamDim }))))))))),
         React.createElement(Card, { className: "p-4" },
             React.createElement("div", { className: "text-sm mb-3", style: { color: COLORS.cream } }, "Record a season's yield"),
             React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-4 gap-3" },
@@ -1214,9 +1418,24 @@ function SettingsView({ data, mutate, onExport, onImport, onExportExcel, onPrint
     const [cycleForm, setCycleForm] = useState({ label: "", month: 6 }); // default July, matching a mid-year Ethrel spray
     const save = () => mutate((d) => ({ ...d, settings: local }));
     const requestNotif = async () => {
-        if (!("Notification" in window))
+        if (!("Notification" in window)) {
+            alert("This browser doesn't support notifications.");
             return;
+        }
         const perm = await Notification.requestPermission();
+        if (perm === "denied") {
+            alert("Notifications are blocked for this site. To enable them, open your browser's site settings for this page and allow Notifications, then try again.");
+        }
+        // Mobile Chrome/Android largely ignores the plain Notification() constructor —
+        // showing notifications reliably there requires a registered Service Worker.
+        if (perm === "granted" && "serviceWorker" in navigator) {
+            try {
+                await navigator.serviceWorker.register("sw.js");
+            }
+            catch (e) {
+                /* registration failing (e.g. opened as a local file, not hosted) still leaves desktop notifications working */
+            }
+        }
         setLocal((l) => ({ ...l, notifyEnabled: perm === "granted" }));
         mutate((d) => ({ ...d, settings: { ...d.settings, notifyEnabled: perm === "granted" } }));
     };
@@ -1350,7 +1569,7 @@ function App() {
         const upcomingMsgs = [];
         const all = [
             ...data.events.filter((e) => !e.done).map((e) => ({ date: e.date, title: e.title })),
-            ...data.sprays.filter((s) => s.status === "planned").map((s) => ({ date: s.date, title: `${s.type === "spray" ? "Spray" : "Fertigation"}: ${s.productName}` })),
+            ...data.sprays.filter((s) => s.status === "planned").map((s) => ({ date: s.date, title: `${s.type === "spray" ? "Spray" : "Fertigation"}: ${sprayPlanLabel(s)}` })),
         ];
         all.forEach((item) => {
             const diff = daysBetween(todayStr(), item.date);
@@ -1364,14 +1583,36 @@ function App() {
         });
         return [...overdueMsgs, ...upcomingMsgs].slice(0, 5);
     }, [data]);
+    // Register the service worker as soon as the app loads (this only needs to
+    // happen once — permission to actually show a notification is requested
+    // separately, in Settings).
+    useEffect(() => {
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.register("sw.js").catch(() => { });
+        }
+    }, []);
     // fire browser notifications once per load if enabled
     const firedRef = useRef(false);
     useEffect(() => {
         if (!data || firedRef.current)
             return;
         if (data.settings.notifyEnabled && "Notification" in window && Notification.permission === "granted" && notifications.length) {
-            notifications.forEach((n) => new Notification("Orchard reminder", { body: n }));
             firedRef.current = true;
+            (async () => {
+                // Android Chrome mostly ignores plain `new Notification()` — showing
+                // notifications reliably there needs a registered Service Worker.
+                if ("serviceWorker" in navigator) {
+                    try {
+                        const reg = await navigator.serviceWorker.ready;
+                        notifications.forEach((n) => reg.showNotification("Orchard reminder", { body: n }));
+                        return;
+                    }
+                    catch (e) {
+                        /* fall through to the plain constructor below */
+                    }
+                }
+                notifications.forEach((n) => new Notification("Orchard reminder", { body: n }));
+            })();
         }
     }, [data, notifications]);
     const handleExport = () => {
@@ -1390,7 +1631,14 @@ function App() {
         const reader = new FileReader();
         reader.onload = () => {
             try {
-                const imported = JSON.parse(reader.result);
+                const parsed = JSON.parse(reader.result);
+                const imported = {
+                    ...DEFAULT_DATA,
+                    ...parsed,
+                    settings: { ...DEFAULT_DATA.settings, ...(parsed.settings || {}) },
+                    fieldVisits: parsed.fieldVisits || [],
+                    expenses: parsed.expenses || [],
+                };
                 setData(imported);
                 saveData(imported);
             }
@@ -1415,12 +1663,12 @@ function App() {
         const wb = XLSX.utils.book_new();
         const sheetDefs = [
             ["Events", data.events.map((e) => ({ Date: e.date, Title: e.title, Type: eventTypeLabel(e.type), Status: e.done ? "Done" : "Pending" }))],
-            ["Spray-Fertigation", data.sprays.map((s) => ({ Date: s.date, Type: s.type === "spray" ? "Foliar Spray" : "Fertigation", Product: s.productName, Quantity: s.quantity, Unit: s.unit, Stage: stageLabel(s.stage), Status: s.status, "Cost (INR)": s.cost || 0, Notes: s.notes || "" }))],
+            ["Spray-Fertigation", data.sprays.map((s) => ({ Date: s.date, Type: s.type === "spray" ? "Foliar Spray" : "Fertigation", Products: sprayPlanLabel(s), Stage: stageLabel(s.stage), Status: s.status, "Cost (INR)": s.cost || 0, Notes: s.notes || "" }))],
             ["Inventory", data.inventory.map((i) => ({ Name: i.name, Category: i.category, "Qty on hand": i.qty, Unit: i.unit, "Reorder below": i.reorderLevel, "Cost per unit (INR)": i.costPerUnit }))],
             ["Field Visits", data.fieldVisits.map((v) => ({ Date: v.date, Category: v.tag, Plot: v.plot || "", Notes: v.notes }))],
             ["Weather Log", data.weatherLogs.map((w) => ({ Date: w.date, "Max Temp C": w.tempMax, "Min Temp C": w.tempMin, "Rainfall mm": w.rainfall, "Humidity %": w.humidity, Source: w.source }))],
             ["Yield Records", data.yieldRecords.map((y) => ({ Season: y.season, Year: y.year, "Yield (kg)": y.yieldKg, "Price/kg (INR)": y.pricePerKg, "Revenue (INR)": y.yieldKg * y.pricePerKg }))],
-            ["Expenses", data.expenses.map((e) => ({ Date: e.date, Category: e.category, Description: e.description, "Amount (INR)": e.amount, Source: e.source }))],
+            ["Expenses", (data.expenses || []).map((e) => ({ Date: e.date, Category: e.category, Description: e.description, "Amount (INR)": e.amount, Source: e.source }))],
         ];
         sheetDefs.forEach(([name, rows]) => {
             const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Note: "No records yet" }]);
@@ -1454,11 +1702,11 @@ function App() {
       <h1>${data.farmName}</h1>
       <div class="muted">${data.settings.place} · Printed ${fmtDate(todayStr())}</div>
       ${table("Calendar Tasks", data.events.map((e) => ({ Date: fmtDate(e.date), Title: e.title, Type: eventTypeLabel(e.type), Status: e.done ? "Done" : "Pending" })), ["Date", "Title", "Type", "Status"])}
-      ${table("Spray & Fertigation", data.sprays.map((s) => ({ Date: fmtDate(s.date), Product: s.productName, Qty: `${s.quantity}${s.unit}`, Stage: stageLabel(s.stage), Status: s.status, Cost: inr(s.cost || 0) })), ["Date", "Product", "Qty", "Stage", "Status", "Cost"])}
+      ${table("Spray & Fertigation", data.sprays.map((s) => ({ Date: fmtDate(s.date), Products: sprayPlanLabel(s), Stage: stageLabel(s.stage), Status: s.status, Cost: inr(s.cost || 0) })), ["Date", "Products", "Stage", "Status", "Cost"])}
       ${table("Inventory", data.inventory.map((i) => ({ Name: i.name, Category: i.category, "On hand": `${i.qty}${i.unit}`, "Reorder below": `${i.reorderLevel}${i.unit}` })), ["Name", "Category", "On hand", "Reorder below"])}
       ${table("Field Visits", data.fieldVisits.map((v) => ({ Date: fmtDate(v.date), Category: v.tag, Plot: v.plot || "—", Notes: v.notes })), ["Date", "Category", "Plot", "Notes"])}
       ${table("Yield Records", data.yieldRecords.map((y) => ({ Season: `${y.season} ${y.year}`, "Yield (kg)": y.yieldKg, "Price/kg": inr(y.pricePerKg), Revenue: inr(y.yieldKg * y.pricePerKg) })), ["Season", "Yield (kg)", "Price/kg", "Revenue"])}
-      ${table("Expenses", data.expenses.map((e) => ({ Date: fmtDate(e.date), Category: e.category, Description: e.description, Amount: inr(e.amount) })), ["Date", "Category", "Description", "Amount"])}
+      ${table("Expenses", (data.expenses || []).map((e) => ({ Date: fmtDate(e.date), Category: e.category, Description: e.description, Amount: inr(e.amount) })), ["Date", "Category", "Description", "Amount"])}
     </body></html>`;
         w.document.write(html);
         w.document.close();
@@ -1493,14 +1741,15 @@ function App() {
             ActiveIcon && React.createElement(Icon, { name: ActiveIcon, size: 18, color: COLORS.ruby }),
             React.createElement("span", { style: { fontFamily: "'Fraunces', serif", color: COLORS.cream, fontSize: "1.1rem" } }, (_b = TABS.find((t) => t.key === activeTab)) === null || _b === void 0 ? void 0 : _b.label)),
         React.createElement("main", { className: "p-4 sm:p-8 max-w-4xl mx-auto" },
-            activeTab === "dashboard" && React.createElement(Dashboard, { data: data, setActiveTab: setActiveTab, notifications: notifications }),
-            activeTab === "calendar" && React.createElement(CalendarView, { data: data, mutate: mutate }),
-            activeTab === "visits" && React.createElement(FieldVisitsView, { data: data, mutate: mutate }),
-            activeTab === "inventory" && React.createElement(InventoryView, { data: data, mutate: mutate }),
-            activeTab === "spray" && React.createElement(SprayPlanner, { data: data, mutate: mutate }),
-            activeTab === "weather" && React.createElement(WeatherView, { data: data, mutate: mutate }),
-            activeTab === "analytics" && React.createElement(AnalyticsView, { data: data, mutate: mutate }),
-            activeTab === "settings" && React.createElement(SettingsView, { data: data, mutate: mutate, onExport: handleExport, onImport: handleImport, onExportExcel: handleExportExcel, onPrintReport: handlePrintReport })),
+            React.createElement(SectionErrorBoundary, { key: activeTab },
+                activeTab === "dashboard" && React.createElement(Dashboard, { data: data, setActiveTab: setActiveTab, notifications: notifications }),
+                activeTab === "calendar" && React.createElement(CalendarView, { data: data, mutate: mutate }),
+                activeTab === "visits" && React.createElement(FieldVisitsView, { data: data, mutate: mutate }),
+                activeTab === "inventory" && React.createElement(InventoryView, { data: data, mutate: mutate }),
+                activeTab === "spray" && React.createElement(SprayPlanner, { data: data, mutate: mutate }),
+                activeTab === "weather" && React.createElement(WeatherView, { data: data, mutate: mutate }),
+                activeTab === "analytics" && React.createElement(AnalyticsView, { data: data, mutate: mutate }),
+                activeTab === "settings" && React.createElement(SettingsView, { data: data, mutate: mutate, onExport: handleExport, onImport: handleImport, onExportExcel: handleExportExcel, onPrintReport: handlePrintReport }))),
         React.createElement("nav", { className: "sm:hidden fixed bottom-0 left-0 right-0 flex overflow-x-auto py-2 px-1 gap-0.5", style: { background: COLORS.bgPanel, borderTop: "1px solid #3A3C31" } }, TABS.map((t) => (React.createElement("button", { key: t.key, onClick: () => setActiveTab(t.key), className: "flex flex-col items-center gap-0.5 px-2.5 py-1 shrink-0", style: { color: activeTab === t.key ? COLORS.ruby : COLORS.creamDim } },
             React.createElement(Icon, { name: t.icon, size: 19 }),
             React.createElement("span", { className: "text-[9px] whitespace-nowrap" }, t.label)))))));
