@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
 <title>Super Bhagwa Orchard — Farm Manager</title>
 <meta name="description" content="Pomegranate farm management: calendar, inventory, spray & fertigation planner, weather, analytics, and field visits." />
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#B12A42" />
+<link rel="icon" href="icon-192.png" />
+<link rel="apple-touch-icon" href="icon-192.png" />
 
 <script>
   // Defined first, so the loader below can report failures as soon as they
@@ -12,6 +16,14 @@
   // down and will pick up anything recorded here the moment it runs.
   var __bootErrors = [];
   function __reportBootFail(lib) { __bootErrors.push(lib); }
+
+  // Captured as early as possible so the in-app "Install app" button (in
+  // Settings) can trigger it later — Chrome only fires this once, early.
+  window.__deferredInstallPrompt = null;
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    window.__deferredInstallPrompt = e;
+  });
 
   // Loads a script from the first URL that works, trying alternates in order
   // (useful when a single CDN is blocked on a given network but another isn't).
@@ -306,6 +318,33 @@ async function loadData() {
     }
     return DEFAULT_DATA;
 }
+// IndexedDB mirror of the same data — localStorage only works while a page is
+// open, but the service worker (which needs to check for due tasks even when
+// the app is fully closed, via Periodic Background Sync) can only read
+// IndexedDB, not localStorage. Both are always kept in sync from saveData().
+const IDB_NAME = "farm-app-db";
+const IDB_STORE = "kv";
+function idbPut(key, value) {
+    return new Promise((resolve, reject) => {
+        if (!("indexedDB" in window)) {
+            resolve();
+            return;
+        }
+        const req = indexedDB.open(IDB_NAME, 1);
+        req.onupgradeneeded = () => {
+            if (!req.result.objectStoreNames.contains(IDB_STORE))
+                req.result.createObjectStore(IDB_STORE);
+        };
+        req.onsuccess = () => {
+            const db = req.result;
+            const tx = db.transaction(IDB_STORE, "readwrite");
+            tx.objectStore(IDB_STORE).put(value, key);
+            tx.oncomplete = () => { db.close(); resolve(); };
+            tx.onerror = () => { db.close(); reject(tx.error); };
+        };
+        req.onerror = () => reject(req.error);
+    });
+}
 async function saveData(data) {
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -313,13 +352,14 @@ async function saveData(data) {
     catch (e) {
         console.error("save failed", e);
     }
+    idbPut("farm-data", data).catch(() => { });
 }
 // ---------- icons (inline, no external icon library needed) ----------
 const ICON_GLYPHS = {
     sprout: "🌱", calendar: "📅", visits: "📋", inventory: "📦", spray: "💧",
     weather: "🌧️", analytics: "📈", settings: "⚙️", bell: "🔔", plus: "+",
     x: "✕", check: "✓", trash: "🗑", alert: "⚠️", download: "⬇️", upload: "⬆️",
-    cloudsun: "⛅", chevronleft: "‹", chevronright: "›", filesheet: "📊", printer: "🖨️",
+    cloudsun: "⛅", chevronleft: "‹", chevronright: "›", filesheet: "📊", printer: "🖨️", edit: "✏️",
 };
 function Icon({ name, size = 16, color, className = "" }) {
     return (React.createElement("span", { className: className, style: {
@@ -630,7 +670,7 @@ function Dashboard({ data, setActiveTab, notifications }) {
                     React.createElement("div", { className: "text-xs px-2 py-1 rounded-full", style: {
                             background: u.overdue ? "rgba(198,81,47,0.18)" : u.kind === "spray" ? "rgba(108,138,90,0.2)" : "rgba(201,154,62,0.2)",
                             color: u.overdue ? COLORS.danger : u.kind === "spray" ? COLORS.leaf : COLORS.gold,
-                        } }, u.overdue ? "Overdue" : u.kind === "spray" ? "Spray plan" : "Event")))))),
+                        } }, u.overdue ? "Overdue" : u.kind === "spray" ? (u.type === "fertigation" ? "Fertigation plan" : "Spray plan") : "Event")))))),
                 React.createElement("div", { className: "grid grid-cols-3 gap-3 mt-4 pt-4", style: { borderTop: "1px solid #3A3C31" } },
                     React.createElement("div", null,
                         React.createElement("div", { className: "text-xl sm:text-2xl", style: { fontFamily: "'Fraunces', serif", color: COLORS.cream } }, inr(totalSpend)),
@@ -870,13 +910,31 @@ function CalendarView({ data, mutate }) {
 }
 // ---------- Inventory ----------
 function InventoryView({ data, mutate }) {
+    const blankForm = { name: "", category: "Fertilizer", qty: "", unit: "kg", reorderLevel: "", costPerUnit: "" };
     const [modal, setModal] = useState(false);
-    const [form, setForm] = useState({ name: "", category: "Fertilizer", qty: "", unit: "kg", reorderLevel: "", costPerUnit: "" });
-    const addItem = () => {
+    const [editingId, setEditingId] = useState(null); // null = adding a new item; otherwise the item's id
+    const [form, setForm] = useState(blankForm);
+    const openAdd = () => {
+        setEditingId(null);
+        setForm(blankForm);
+        setModal(true);
+    };
+    const openEdit = (item) => {
+        setEditingId(item.id);
+        setForm({
+            name: item.name,
+            category: item.category,
+            qty: String(item.qty),
+            unit: item.unit,
+            reorderLevel: String(item.reorderLevel),
+            costPerUnit: String(item.costPerUnit),
+        });
+        setModal(true);
+    };
+    const saveItem = () => {
         if (!form.name.trim())
             return;
-        const item = {
-            id: uid(),
+        const fields = {
             name: form.name.trim(),
             category: form.category,
             qty: parseFloat(form.qty) || 0,
@@ -884,9 +942,15 @@ function InventoryView({ data, mutate }) {
             reorderLevel: parseFloat(form.reorderLevel) || 0,
             costPerUnit: parseFloat(form.costPerUnit) || 0,
         };
-        mutate((d) => ({ ...d, inventory: [...d.inventory, item] }));
+        if (editingId) {
+            mutate((d) => ({ ...d, inventory: d.inventory.map((i) => (i.id === editingId ? { ...i, ...fields } : i)) }));
+        }
+        else {
+            mutate((d) => ({ ...d, inventory: [...d.inventory, { id: uid(), ...fields }] }));
+        }
         setModal(false);
-        setForm({ name: "", category: "Fertilizer", qty: "", unit: "kg", reorderLevel: "", costPerUnit: "" });
+        setEditingId(null);
+        setForm(blankForm);
     };
     const adjustQty = (id, delta) => {
         mutate((d) => ({
@@ -897,7 +961,7 @@ function InventoryView({ data, mutate }) {
     const removeItem = (id) => mutate((d) => ({ ...d, inventory: d.inventory.filter((i) => i.id !== id) }));
     const totalValue = data.inventory.reduce((sum, i) => sum + i.costPerUnit * i.qty, 0);
     return (React.createElement("div", { className: "space-y-4" },
-        React.createElement(SectionTitle, { eyebrow: "Store room", title: "Inventory", right: React.createElement(Btn, { onClick: () => setModal(true) },
+        React.createElement(SectionTitle, { eyebrow: "Store room", title: "Inventory", right: React.createElement(Btn, { onClick: openAdd },
                 React.createElement(Icon, { name: "plus", size: 16 }),
                 " Add item") }),
         React.createElement(Card, { className: "p-4 flex items-center justify-between" },
@@ -910,8 +974,11 @@ function InventoryView({ data, mutate }) {
                     React.createElement("div", null,
                         React.createElement("div", { className: "text-sm", style: { color: COLORS.cream, fontWeight: 600 } }, i.name),
                         React.createElement("div", { className: "text-xs", style: { color: COLORS.creamDim } }, i.category)),
-                    React.createElement("button", { onClick: () => removeItem(i.id) },
-                        React.createElement(Icon, { name: "trash", size: 14, color: COLORS.creamDim }))),
+                    React.createElement("div", { className: "flex items-center gap-3 shrink-0" },
+                        React.createElement("button", { onClick: () => openEdit(i), title: "Edit" },
+                            React.createElement(Icon, { name: "edit", size: 13, color: COLORS.creamDim })),
+                        React.createElement("button", { onClick: () => removeItem(i.id), title: "Delete" },
+                            React.createElement(Icon, { name: "trash", size: 14, color: COLORS.creamDim })))),
                 React.createElement("div", { className: "flex items-center justify-between mt-3" },
                     React.createElement("div", { className: "flex items-center gap-2" },
                         React.createElement("button", { onClick: () => adjustQty(i.id, -1), className: "w-7 h-7 rounded-full flex items-center justify-center", style: { background: "#1B1C17", color: COLORS.cream } }, "-"),
@@ -936,7 +1003,7 @@ function InventoryView({ data, mutate }) {
                     i.unit,
                     ")"))));
         })),
-        React.createElement(Modal, { open: modal, onClose: () => setModal(false), title: "New inventory item" },
+        React.createElement(Modal, { open: modal, onClose: () => setModal(false), title: editingId ? "Edit inventory item" : "New inventory item" },
             React.createElement("div", { className: "space-y-3" },
                 React.createElement(Field, { label: "Name" },
                     React.createElement("input", { className: inputClass, style: inputStyle, value: form.name, onChange: (e) => setForm({ ...form, name: e.target.value }), placeholder: "e.g. Urea" })),
@@ -952,7 +1019,7 @@ function InventoryView({ data, mutate }) {
                         React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: form.reorderLevel, onChange: (e) => setForm({ ...form, reorderLevel: e.target.value }) }))),
                 React.createElement(Field, { label: "Cost per unit (\u20B9)" },
                     React.createElement("input", { type: "number", className: inputClass, style: inputStyle, value: form.costPerUnit, onChange: (e) => setForm({ ...form, costPerUnit: e.target.value }) })),
-                React.createElement(Btn, { onClick: addItem, className: "w-full" }, "Save item")))));
+                React.createElement(Btn, { onClick: saveItem, className: "w-full" }, editingId ? "Save changes" : "Save item")))));
 }
 // ---------- Spray & Fertigation Planner ----------
 function SprayPlanner({ data, mutate }) {
@@ -1430,7 +1497,18 @@ function SettingsView({ data, mutate, onExport, onImport, onExportExcel, onPrint
         // showing notifications reliably there requires a registered Service Worker.
         if (perm === "granted" && "serviceWorker" in navigator) {
             try {
-                await navigator.serviceWorker.register("sw.js");
+                const reg = await navigator.serviceWorker.register("sw.js");
+                if ("periodicSync" in reg && "permissions" in navigator) {
+                    try {
+                        const status = await navigator.permissions.query({ name: "periodic-background-sync" });
+                        if (status.state === "granted") {
+                            await reg.periodicSync.register("check-farm-tasks", { minInterval: 12 * 60 * 60 * 1000 });
+                        }
+                    }
+                    catch (e) {
+                        /* not supported here — in-app reminders still work regardless */
+                    }
+                }
             }
             catch (e) {
                 /* registration failing (e.g. opened as a local file, not hosted) still leaves desktop notifications working */
@@ -1503,8 +1581,23 @@ function SettingsView({ data, mutate, onExport, onImport, onExportExcel, onPrint
                     describeCycle(Number(cycleForm.month) - BASE_INDUCTION_MONTH)),
                 React.createElement(Btn, { onClick: addCustomCycle, className: "w-full", disabled: !cycleForm.label.trim() }, "Create cycle"))),
         React.createElement(Card, { className: "p-5" },
+            React.createElement("div", { className: "text-sm mb-2", style: { color: COLORS.cream } }, "Install this app"),
+            React.createElement("div", { className: "text-xs mb-3", style: { color: COLORS.creamDim } }, "Add this to your home screen so it opens like a real app \u2014 and so Android can check for due tasks in the background and notify you even when the app isn't open. (Chrome/Android only; timing isn't exact, the browser decides how often to check.)"),
+            React.createElement(Btn, { variant: "gold", onClick: async () => {
+                    if (window.__deferredInstallPrompt) {
+                        window.__deferredInstallPrompt.prompt();
+                        await window.__deferredInstallPrompt.userChoice;
+                        window.__deferredInstallPrompt = null;
+                    }
+                    else {
+                        alert("Your browser didn't offer an install prompt. On Chrome/Android, look for \"Add to Home screen\" or \"Install app\" in the browser menu (⋮). If you've already installed it, this button has nothing left to do.");
+                    }
+                } },
+                React.createElement(Icon, { name: "download", size: 16 }),
+                " Install app")),
+        React.createElement(Card, { className: "p-5" },
             React.createElement("div", { className: "text-sm mb-2", style: { color: COLORS.cream } }, "Browser notifications"),
-            React.createElement("div", { className: "text-xs mb-3", style: { color: COLORS.creamDim } }, "Turn these on to get a device notification for upcoming sprays and tasks while this app is open in your browser."),
+            React.createElement("div", { className: "text-xs mb-3", style: { color: COLORS.creamDim } }, "Turn these on for a device notification about upcoming sprays and tasks, checked at 8:00 AM, 10:00 AM, and 8:00 PM only. Reminders always show inside the app; for a chance at background notifications while the app is closed, also install it above (Chrome/Android only)."),
             React.createElement(Btn, { variant: "gold", onClick: requestNotif },
                 React.createElement(Icon, { name: "bell", size: 16 }),
                 " ",
@@ -1567,11 +1660,8 @@ function App() {
         const notifyBy = (_a = data.settings.notifyDaysBefore) !== null && _a !== void 0 ? _a : 3;
         const overdueMsgs = [];
         const upcomingMsgs = [];
-        const all = [
-            ...data.events.filter((e) => !e.done).map((e) => ({ date: e.date, title: e.title })),
-            ...data.sprays.filter((s) => s.status === "planned").map((s) => ({ date: s.date, title: `${s.type === "spray" ? "Spray" : "Fertigation"}: ${sprayPlanLabel(s)}` })),
-        ];
-        all.forEach((item) => {
+        // calendar tasks use the general lead time set in Settings
+        data.events.filter((e) => !e.done).forEach((item) => {
             const diff = daysBetween(todayStr(), item.date);
             if (diff < 0) {
                 const daysLate = -diff;
@@ -1581,39 +1671,101 @@ function App() {
                 upcomingMsgs.push(diff === 0 ? `Today: ${item.title}` : `In ${diff} day${diff > 1 ? "s" : ""}: ${item.title}`);
             }
         });
-        return [...overdueMsgs, ...upcomingMsgs].slice(0, 5);
+        // Spray/fertigation plans notify same-day by default. A plan containing a
+        // Bio Stimulant gets a 3-day heads-up instead (those often need lead time
+        // to source or prepare), with the application date spelled out.
+        data.sprays.filter((s) => s.status === "planned").forEach((s) => {
+            const hasBioStimulant = (s.items || []).some((it) => {
+                const inv = data.inventory.find((i) => i.id === it.inventoryId);
+                return inv && inv.category === "Bio Stimulant";
+            });
+            const leadDays = hasBioStimulant ? 3 : 0;
+            const diff = daysBetween(todayStr(), s.date);
+            const label = `${s.type === "spray" ? "Spray" : "Fertigation"}: ${sprayPlanLabel(s)}`;
+            if (diff < 0) {
+                const daysLate = -diff;
+                overdueMsgs.push(`Overdue by ${daysLate} day${daysLate > 1 ? "s" : ""}: ${label}`);
+            }
+            else if (diff <= leadDays) {
+                const dateNote = fmtDate(s.date);
+                upcomingMsgs.push(diff === 0 ? `Today (${dateNote}): ${label}` : `In ${diff} day${diff > 1 ? "s" : ""} — on ${dateNote}: ${label}`);
+            }
+        });
+        return [...overdueMsgs, ...upcomingMsgs].slice(0, 6);
     }, [data]);
-    // Register the service worker as soon as the app loads (this only needs to
-    // happen once — permission to actually show a notification is requested
-    // separately, in Settings).
+    // Register the service worker as soon as the app loads (permission to
+    // actually show a notification is requested separately, in Settings). Also
+    // try to register Periodic Background Sync — this only actually takes
+    // effect on Chromium/Android, and only once the app has been installed
+    // (Add to Home Screen) with enough engagement; it's a silent no-op
+    // everywhere else, which is fine.
     useEffect(() => {
         if ("serviceWorker" in navigator) {
-            navigator.serviceWorker.register("sw.js").catch(() => { });
-        }
-    }, []);
-    // fire browser notifications once per load if enabled
-    const firedRef = useRef(false);
-    useEffect(() => {
-        if (!data || firedRef.current)
-            return;
-        if (data.settings.notifyEnabled && "Notification" in window && Notification.permission === "granted" && notifications.length) {
-            firedRef.current = true;
-            (async () => {
-                // Android Chrome mostly ignores plain `new Notification()` — showing
-                // notifications reliably there needs a registered Service Worker.
-                if ("serviceWorker" in navigator) {
+            navigator.serviceWorker
+                .register("sw.js")
+                .then(async (reg) => {
+                if ("periodicSync" in reg && "permissions" in navigator) {
                     try {
-                        const reg = await navigator.serviceWorker.ready;
-                        notifications.forEach((n) => reg.showNotification("Orchard reminder", { body: n }));
-                        return;
+                        const status = await navigator.permissions.query({ name: "periodic-background-sync" });
+                        if (status.state === "granted") {
+                            await reg.periodicSync.register("check-farm-tasks", { minInterval: 12 * 60 * 60 * 1000 });
+                        }
                     }
                     catch (e) {
-                        /* fall through to the plain constructor below */
+                        /* not supported on this browser — that's fine, in-app reminders still work */
                     }
                 }
-                notifications.forEach((n) => new Notification("Orchard reminder", { body: n }));
-            })();
+            })
+                .catch(() => { });
         }
+    }, []);
+    // Notifications fire only at fixed times of day — 8:00, 10:00, and 20:00 —
+    // instead of immediately whenever the app happens to be opened. This checks
+    // every 30s while the app is open and fires at most once per slot per day
+    // (tracked in localStorage so a slot never double-fires, e.g. from two tabs).
+    const NOTIFY_SLOTS = ["08:00", "10:00", "20:00"];
+    useEffect(() => {
+        const fireNotifications = async () => {
+            if ("serviceWorker" in navigator) {
+                try {
+                    const reg = await navigator.serviceWorker.ready;
+                    notifications.forEach((n) => reg.showNotification("Orchard reminder", { body: n }));
+                    return;
+                }
+                catch (e) {
+                    /* fall through to the plain constructor below */
+                }
+            }
+            notifications.forEach((n) => new Notification("Orchard reminder", { body: n }));
+        };
+        const checkSlot = () => {
+            if (!data || !data.settings.notifyEnabled || !("Notification" in window) || Notification.permission !== "granted" || !notifications.length)
+                return;
+            const now = new Date();
+            const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+            if (!NOTIFY_SLOTS.includes(hhmm))
+                return;
+            const slotKey = `${todayStr()}-${hhmm}`;
+            let lastFired = null;
+            try {
+                lastFired = localStorage.getItem("lastNotifySlot");
+            }
+            catch (e) {
+                /* ignore */
+            }
+            if (lastFired === slotKey)
+                return;
+            try {
+                localStorage.setItem("lastNotifySlot", slotKey);
+            }
+            catch (e) {
+                /* ignore */
+            }
+            fireNotifications();
+        };
+        checkSlot();
+        const id = setInterval(checkSlot, 30000);
+        return () => clearInterval(id);
     }, [data, notifications]);
     const handleExport = () => {
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
