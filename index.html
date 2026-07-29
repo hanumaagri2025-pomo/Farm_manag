@@ -1026,14 +1026,32 @@ function SprayPlanner({ data, mutate }) {
     const cycleDef = resolveCycle(data);
     const stages = useMemo(() => getStages(cycleDef.shift), [cycleDef.shift]);
     const [modal, setModal] = useState(false);
+    const [editingId, setEditingId] = useState(null); // null = adding a new plan; otherwise the plan's id
     const emptyRow = () => ({ rowId: uid(), inventoryId: "", quantity: "" });
-    const [form, setForm] = useState({ date: todayStr(), type: "spray", stage: stages[0].key, notes: "", items: [emptyRow()] });
+    const blankForm = () => ({ date: todayStr(), type: "spray", stage: stages[0].key, notes: "", items: [emptyRow()] });
+    const [form, setForm] = useState(blankForm);
     const updateRow = (rowId, patch) => {
         setForm((f) => ({ ...f, items: f.items.map((r) => (r.rowId === rowId ? { ...r, ...patch } : r)) }));
     };
     const addRow = () => setForm((f) => ({ ...f, items: [...f.items, emptyRow()] }));
     const removeRow = (rowId) => setForm((f) => ({ ...f, items: f.items.length > 1 ? f.items.filter((r) => r.rowId !== rowId) : f.items }));
-    const addPlan = () => {
+    const openAdd = () => {
+        setEditingId(null);
+        setForm(blankForm());
+        setModal(true);
+    };
+    const openEdit = (plan) => {
+        setEditingId(plan.id);
+        setForm({
+            date: plan.date,
+            type: plan.type,
+            stage: plan.stage,
+            notes: plan.notes || "",
+            items: (plan.items || []).map((it) => ({ rowId: uid(), inventoryId: it.inventoryId, quantity: String(it.quantity) })),
+        });
+        setModal(true);
+    };
+    const savePlan = () => {
         const items = form.items
             .filter((r) => r.inventoryId && parseFloat(r.quantity) > 0)
             .map((r) => {
@@ -1043,19 +1061,19 @@ function SprayPlanner({ data, mutate }) {
             .filter(Boolean);
         if (items.length === 0)
             return;
-        const plan = {
-            id: uid(),
-            date: form.date,
-            type: form.type,
-            items,
-            stage: form.stage,
-            status: "planned",
-            notes: form.notes,
-            cost: 0,
-        };
-        mutate((d) => ({ ...d, sprays: [...d.sprays, plan] }));
+        if (editingId) {
+            mutate((d) => ({
+                ...d,
+                sprays: d.sprays.map((s) => s.id === editingId ? { ...s, date: form.date, type: form.type, items, stage: form.stage, notes: form.notes } : s),
+            }));
+        }
+        else {
+            const plan = { id: uid(), date: form.date, type: form.type, items, stage: form.stage, status: "planned", notes: form.notes, cost: 0 };
+            mutate((d) => ({ ...d, sprays: [...d.sprays, plan] }));
+        }
         setModal(false);
-        setForm({ date: todayStr(), type: "spray", stage: stages[0].key, notes: "", items: [emptyRow()] });
+        setEditingId(null);
+        setForm(blankForm());
     };
     const markDone = (id) => {
         mutate((d) => {
@@ -1085,7 +1103,7 @@ function SprayPlanner({ data, mutate }) {
     const planLabel = (s) => (s.items || []).map((it) => `${it.productName} (${it.quantity}${it.unit})`).join(", ");
     const validRowCount = form.items.filter((r) => r.inventoryId && parseFloat(r.quantity) > 0).length;
     return (React.createElement("div", { className: "space-y-4" },
-        React.createElement(SectionTitle, { eyebrow: "Stage-linked schedule", title: "Spray & Fertigation", right: React.createElement(Btn, { onClick: () => setModal(true) },
+        React.createElement(SectionTitle, { eyebrow: "Stage-linked schedule", title: "Spray & Fertigation", right: React.createElement(Btn, { onClick: openAdd },
                 React.createElement(Icon, { name: "plus", size: 16 }),
                 " Plan") }),
         React.createElement(Card, { className: "p-4" },
@@ -1120,6 +1138,8 @@ function SprayPlanner({ data, mutate }) {
                                 color: s.status === "done" ? COLORS.leaf : s.status === "skipped" ? COLORS.danger : COLORS.gold,
                             } }, s.status),
                         s.status === "planned" && (React.createElement(React.Fragment, null,
+                            React.createElement("button", { onClick: () => openEdit(s), title: "Edit" },
+                                React.createElement(Icon, { name: "edit", size: 14, color: COLORS.creamDim })),
                             React.createElement("button", { onClick: () => markDone(s.id), title: "Mark done" },
                                 React.createElement(Icon, { name: "check", size: 16, color: COLORS.leaf })),
                             React.createElement("button", { onClick: () => markSkipped(s.id), title: "Skip" },
@@ -1127,7 +1147,7 @@ function SprayPlanner({ data, mutate }) {
                         React.createElement("button", { onClick: () => removePlan(s.id) },
                             React.createElement(Icon, { name: "trash", size: 14, color: COLORS.creamDim })))));
             })),
-        React.createElement(Modal, { open: modal, onClose: () => setModal(false), title: "New spray / fertigation plan" },
+        React.createElement(Modal, { open: modal, onClose: () => setModal(false), title: editingId ? "Edit spray / fertigation plan" : "New spray / fertigation plan" },
             React.createElement("div", { className: "space-y-3" },
                 React.createElement("div", { className: "grid grid-cols-2 gap-3" },
                     React.createElement(Field, { label: "Date" },
@@ -1158,7 +1178,7 @@ function SprayPlanner({ data, mutate }) {
                     React.createElement("select", { className: inputClass, style: inputStyle, value: form.stage, onChange: (e) => setForm({ ...form, stage: e.target.value }) }, stages.map((s) => React.createElement("option", { key: s.key, value: s.key }, s.label)))),
                 React.createElement(Field, { label: "Notes" },
                     React.createElement("input", { className: inputClass, style: inputStyle, value: form.notes, onChange: (e) => setForm({ ...form, notes: e.target.value }), placeholder: "Dose rate, tank mix, etc." })),
-                React.createElement(Btn, { onClick: addPlan, className: "w-full", disabled: validRowCount === 0 }, "Save plan")))));
+                React.createElement(Btn, { onClick: savePlan, className: "w-full", disabled: validRowCount === 0 }, editingId ? "Save changes" : "Save plan")))));
 }
 // ---------- Weather ----------
 function WeatherView({ data, mutate }) {
