@@ -1455,20 +1455,38 @@ const VISIT_TAG_COLORS = {
     "Weather damage": COLORS.ruby,
 };
 function FieldVisitsView({ data, mutate }) {
+    const blankForm = { date: todayStr(), tag: "General", plot: "", notes: "" };
     const [modal, setModal] = useState(false);
-    const [form, setForm] = useState({ date: todayStr(), tag: "General", plot: "", notes: "" });
-    const addVisit = () => {
+    const [editingId, setEditingId] = useState(null); // null = adding a new visit; otherwise the visit's id
+    const [form, setForm] = useState(blankForm);
+    const openAdd = () => {
+        setEditingId(null);
+        setForm(blankForm);
+        setModal(true);
+    };
+    const openEdit = (visit) => {
+        setEditingId(visit.id);
+        setForm({ date: visit.date, tag: visit.tag, plot: visit.plot || "", notes: visit.notes });
+        setModal(true);
+    };
+    const saveVisit = () => {
         if (!form.notes.trim())
             return;
-        const visit = { id: uid(), date: form.date, tag: form.tag, plot: form.plot.trim(), notes: form.notes.trim() };
-        mutate((d) => ({ ...d, fieldVisits: [...d.fieldVisits, visit] }));
+        const fields = { date: form.date, tag: form.tag, plot: form.plot.trim(), notes: form.notes.trim() };
+        if (editingId) {
+            mutate((d) => ({ ...d, fieldVisits: d.fieldVisits.map((v) => (v.id === editingId ? { ...v, ...fields } : v)) }));
+        }
+        else {
+            mutate((d) => ({ ...d, fieldVisits: [...d.fieldVisits, { id: uid(), ...fields }] }));
+        }
         setModal(false);
-        setForm({ date: todayStr(), tag: "General", plot: "", notes: "" });
+        setEditingId(null);
+        setForm(blankForm);
     };
     const removeVisit = (id) => mutate((d) => ({ ...d, fieldVisits: d.fieldVisits.filter((v) => v.id !== id) }));
     const sorted = [...data.fieldVisits].sort((a, b) => b.date.localeCompare(a.date));
     return (React.createElement("div", { className: "space-y-4" },
-        React.createElement(SectionTitle, { eyebrow: "Walk the orchard", title: "Field Visits", right: React.createElement(Btn, { onClick: () => setModal(true) },
+        React.createElement(SectionTitle, { eyebrow: "Walk the orchard", title: "Field Visits", right: React.createElement(Btn, { onClick: openAdd },
                 React.createElement(Icon, { name: "plus", size: 16 }),
                 " Log visit") }),
         React.createElement("div", { className: "space-y-2" },
@@ -1481,10 +1499,13 @@ function FieldVisitsView({ data, mutate }) {
                         v.plot && React.createElement("span", { className: "text-xs", style: { color: COLORS.creamDim } },
                             "\u00B7 ",
                             v.plot)),
-                    React.createElement("button", { onClick: () => removeVisit(v.id) },
-                        React.createElement(Icon, { name: "trash", size: 14, color: COLORS.creamDim }))),
+                    React.createElement("div", { className: "flex items-center gap-3 shrink-0" },
+                        React.createElement("button", { onClick: () => openEdit(v), title: "Edit" },
+                            React.createElement(Icon, { name: "edit", size: 13, color: COLORS.creamDim })),
+                        React.createElement("button", { onClick: () => removeVisit(v.id), title: "Delete" },
+                            React.createElement(Icon, { name: "trash", size: 14, color: COLORS.creamDim })))),
                 React.createElement("div", { className: "text-sm mt-2 whitespace-pre-wrap", style: { color: COLORS.cream } }, v.notes))))),
-        React.createElement(Modal, { open: modal, onClose: () => setModal(false), title: "Log a field visit" },
+        React.createElement(Modal, { open: modal, onClose: () => setModal(false), title: editingId ? "Edit field visit" : "Log a field visit" },
             React.createElement("div", { className: "space-y-3" },
                 React.createElement("div", { className: "grid grid-cols-2 gap-3" },
                     React.createElement(Field, { label: "Date" },
@@ -1495,7 +1516,7 @@ function FieldVisitsView({ data, mutate }) {
                     React.createElement("input", { className: inputClass, style: inputStyle, value: form.plot, onChange: (e) => setForm({ ...form, plot: e.target.value }), placeholder: "e.g. North block, row 3" })),
                 React.createElement(Field, { label: "Notes" },
                     React.createElement("textarea", { className: inputClass, style: { ...inputStyle, minHeight: "100px", resize: "vertical" }, value: form.notes, onChange: (e) => setForm({ ...form, notes: e.target.value }), placeholder: "What did you see? Any action needed?" })),
-                React.createElement(Btn, { onClick: addVisit, className: "w-full", disabled: !form.notes.trim() }, "Save visit")))));
+                React.createElement(Btn, { onClick: saveVisit, className: "w-full", disabled: !form.notes.trim() }, editingId ? "Save changes" : "Save visit")))));
 }
 // ---------- Settings ----------
 function SettingsView({ data, mutate, onExport, onImport, onExportExcel, onPrintReport }) {
